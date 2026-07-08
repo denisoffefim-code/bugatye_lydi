@@ -174,12 +174,12 @@ async def _migration_create_raw_layers(conn: asyncpg.Connection) -> None:
     )
 
 
-async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None:
+async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -> None:
     await conn.execute(
         """
         CREATE OR REPLACE VIEW dm_forecast_errors AS
         WITH latest_forecast AS (
-            SELECT DISTINCT ON (fv.station_id, fv.forecast_date)
+            SELECT DISTINCT ON (fv.station_id, fv.forecast_date, fv.horizon_days)
                 fv.station_id,
                 fv.forecast_date,
                 fv.horizon_days,
@@ -193,7 +193,7 @@ async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None
             FROM forecast_values fv
             JOIN forecast_runs fr ON fr.id = fv.run_id
             WHERE fr.status IN ('success', 'partial_failed')
-            ORDER BY fv.station_id, fv.forecast_date, fr.run_at DESC
+            ORDER BY fv.station_id, fv.forecast_date, fv.horizon_days, fr.run_at DESC
         ),
         metric_rows AS (
             SELECT
@@ -324,6 +324,14 @@ async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None
     )
 
 
+async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None:
+    await _create_or_replace_dm_forecast_errors_view(conn)
+
+
+async def _migration_refresh_dm_forecast_errors_horizon_aware(conn: asyncpg.Connection) -> None:
+    await _create_or_replace_dm_forecast_errors_view(conn)
+
+
 async def _migration_create_users_and_auth(conn: asyncpg.Connection) -> None:
     await conn.execute(
         """
@@ -376,6 +384,10 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             ("skycast_add_forecast_indexes", _migration_add_forecast_indexes),
             ("skycast_create_raw_layers", _migration_create_raw_layers),
             ("skycast_create_dm_forecast_errors", _migration_create_dm_forecast_errors),
+            (
+                "skycast_refresh_dm_forecast_errors_horizon_aware",
+                _migration_refresh_dm_forecast_errors_horizon_aware,
+            ),
             ("skycast_create_users_and_auth", _migration_create_users_and_auth),
         ]
 

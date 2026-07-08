@@ -42,6 +42,10 @@ class Settings:
     kafka_topic_prefix: str = os.getenv("KAFKA_TOPIC_PREFIX", "skycast")
     kafka_client_id: str = os.getenv("KAFKA_CLIENT_ID", "skycast-outbox-worker")
     open_meteo_base_url: str = os.getenv("OPEN_METEO_BASE_URL", "https://api.open-meteo.com")
+    open_meteo_previous_runs_base_url: str = os.getenv(
+        "OPEN_METEO_PREVIOUS_RUNS_BASE_URL",
+        "https://previous-runs-api.open-meteo.com",
+    )
     open_meteo_model: str = os.getenv("OPEN_METEO_MODEL", "best_match")
     noaa_igra_station_list_url: str = os.getenv(
         "NOAA_IGRA_STATION_LIST_URL",

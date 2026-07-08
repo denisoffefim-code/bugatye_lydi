@@ -29,6 +29,7 @@ from skycast.clients import (
     AsyncRateLimiter,
     fetch_noaa_station_metadata,
     fetch_open_meteo_forecast,
+    fetch_open_meteo_previous_runs_forecast,
     with_retries,
 )
 from skycast.config import settings
@@ -65,6 +66,8 @@ class ForecastFetchRequest(BaseModel):
     start_date: date
     end_date: date
     model: str = settings.open_meteo_model
+    source: Literal["forecast", "previous_runs"] = "forecast"
+    archive_horizon_days: int = Field(default=1, ge=1, le=7)
     station_ids: list[int] | None = None
     wmo_indices: list[str] | None = None
     limit: int | None = Field(default=None, ge=1, le=200)
@@ -931,6 +934,8 @@ async def fetch_forecasts(
                 "start_date": request.start_date.isoformat(),
                 "end_date": request.end_date.isoformat(),
                 "model": request.model,
+                "source": request.source,
+                "archive_horizon_days": request.archive_horizon_days,
             },
         )
 
@@ -954,17 +959,31 @@ async def fetch_forecasts(
 
                     try:
                         await rate_limiter.wait()
-                        records, _payload = await with_retries(
-                            lambda: fetch_open_meteo_forecast(
-                                session,
-                                base_url=settings.open_meteo_base_url,
-                                latitude=station["latitude"],
-                                longitude=station["longitude"],
-                                start_date=request.start_date,
-                                end_date=request.end_date,
-                                model=request.model,
+                        if request.source == "previous_runs":
+                            records, _payload = await with_retries(
+                                lambda: fetch_open_meteo_previous_runs_forecast(
+                                    session,
+                                    base_url=settings.open_meteo_previous_runs_base_url,
+                                    latitude=station["latitude"],
+                                    longitude=station["longitude"],
+                                    start_date=request.start_date,
+                                    end_date=request.end_date,
+                                    model=request.model,
+                                    horizon_days=request.archive_horizon_days,
+                                )
                             )
-                        )
+                        else:
+                            records, _payload = await with_retries(
+                                lambda: fetch_open_meteo_forecast(
+                                    session,
+                                    base_url=settings.open_meteo_base_url,
+                                    latitude=station["latitude"],
+                                    longitude=station["longitude"],
+                                    start_date=request.start_date,
+                                    end_date=request.end_date,
+                                    model=request.model,
+                                )
+                            )
                         prepared = [
                             {
                                 "forecast_date": record.forecast_date,
@@ -997,6 +1016,7 @@ async def fetch_forecasts(
                                         "station_id": station["id"],
                                         "wmo_index": station["wmo_index"],
                                         "model": request.model,
+                                        "source": request.source,
                                         **value["raw_payload"],
                                     },
                                 )
@@ -1056,6 +1076,8 @@ async def fetch_forecasts(
             "stations_requested": len(stations),
             "forecast_rows_saved": saved_rows,
             "failed_stations": len(errors),
+            "source": request.source,
+            "archive_horizon_days": request.archive_horizon_days if request.source == "previous_runs" else None,
             "errors": errors[:20],
         }
     except Exception as exc:
