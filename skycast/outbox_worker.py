@@ -356,6 +356,7 @@ class OutboxPublisher:
         try:
             await kafka_producer.start()
         except Exception:
+            await kafka_producer.stop()
             await redis_client.aclose()
             raise
         self._redis_client = redis_client

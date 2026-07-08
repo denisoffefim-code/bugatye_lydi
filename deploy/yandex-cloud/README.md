@@ -25,7 +25,7 @@ docker push cr.yandex/<registry-id>/skycast:<image-tag>
 - immutable tag: commit SHA, например `cr.yandex/<registry-id>/skycast:git-<sha>`;
 - optional release tag: `cr.yandex/<registry-id>/skycast:release-<version>`.
 
-Текущие манифесты ссылаются на образ `cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02`.
+Текущие манифесты ссылаются на образ `cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-03`.
 При следующем релизе обнови tag во всех workload manifests.
 
 ## Prepare secrets

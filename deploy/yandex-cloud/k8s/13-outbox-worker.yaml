@@ -28,7 +28,7 @@ spec:
         fsGroup: 999
       containers:
         - name: outbox-worker
-          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-03
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "skycast.outbox_worker"]
           envFrom:

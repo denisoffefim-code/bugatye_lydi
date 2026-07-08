@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from skycast.config import Settings
 from skycast.outbox_worker import (
@@ -153,3 +153,29 @@ class OutboxWorkerHelpersTests(unittest.TestCase):
 
             spool.delete_message(self.message.id)
             self.assertEqual(spool.read_messages(), [])
+
+
+class OutboxPublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_closes_producer_when_kafka_bootstrap_fails(self) -> None:
+        redis_client = AsyncMock()
+        kafka_producer = AsyncMock()
+        kafka_producer.start.side_effect = RuntimeError("bootstrap failed")
+        producer_cls = Mock(return_value=kafka_producer)
+        redis_module = Mock()
+        redis_module.from_url.return_value = redis_client
+
+        with patch("skycast.outbox_worker.load_redis_module", return_value=redis_module), patch(
+            "skycast.outbox_worker.load_aiokafka_producer", return_value=producer_cls
+        ), patch(
+            "skycast.outbox_worker.settings",
+            Settings(database_url="postgresql://test", kafka_bootstrap_servers="kafka:9092"),
+        ):
+            from skycast.outbox_worker import OutboxPublisher
+
+            publisher = OutboxPublisher()
+
+            with self.assertRaisesRegex(RuntimeError, "bootstrap failed"):
+                await publisher.start()
+
+        redis_client.aclose.assert_awaited_once()
+        kafka_producer.stop.assert_awaited_once()
