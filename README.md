@@ -11,7 +11,9 @@ FastAPI-бэкенд для сравнения прогноза погоды с 
 - DB-backed outbox worker, который публикует события одновременно в Redis Streams и Kafka;
 - локальный файловый spool у outbox worker на случай недоступности Redis/Kafka;
 - structured JSON logs и базовые Prometheus-метрики по request/error/lag;
+- `users` и `auth_sessions` в той же PostgreSQL в Yandex Cloud;
 - API для:
+  - регистрации и bearer-auth;
   - просмотра станций;
   - просмотра детали станции и покрытия по таблицам;
   - backfill координат станций из NOAA IGRA;
@@ -79,6 +81,10 @@ python data_loaders/load_remote.py \
 ## Основные эндпоинты
 
 - `GET /health`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
 - `GET /api/stations`
 - `GET /api/stations/{station_id}/details`
 - `POST /api/stations/backfill-coordinates`
@@ -99,14 +105,30 @@ python data_loaders/load_remote.py \
 ```bash
 curl -X POST http://localhost:8080/api/stations/backfill-coordinates \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d "{\"dry_run\": true}"
 ```
 
 ### Загрузка прогноза
 
+Сначала создайте пользователя и получите bearer token:
+
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@example.com\",\"full_name\":\"Admin User\",\"password\":\"secret123\"}"
+```
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@example.com\",\"password\":\"secret123\"}"
+```
+
 ```bash
 curl -X POST http://localhost:8080/api/forecasts/fetch \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d "{\"start_date\":\"2026-07-07\",\"end_date\":\"2026-07-10\",\"limit\":10}"
 ```
 
@@ -121,4 +143,4 @@ curl "http://localhost:8080/api/analytics/top-errors?start_date=2026-07-01&end_d
 - добрать координаты для станций, которых нет в NOAA IGRA;
 - вынести загрузку прогнозов и телеметрии в отдельные сервисы/воркеры;
 - добавить Kubernetes-манифесты и deployment-описание для Yandex Cloud;
-- добавить авторизацию и фронтенд-аналитику.
+- добавить role-based access control и фронтенд-аналитику.

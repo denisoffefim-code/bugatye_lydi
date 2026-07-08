@@ -324,6 +324,46 @@ async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None
     )
 
 
+async def _migration_create_users_and_auth(conn: asyncpg.Connection) -> None:
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGSERIAL PRIMARY KEY,
+            email VARCHAR(320) NOT NULL UNIQUE,
+            full_name VARCHAR(255) NOT NULL,
+            password_hash TEXT NOT NULL,
+            role VARCHAR(32) NOT NULL DEFAULT 'user',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_login_at TIMESTAMPTZ
+        )
+        """
+    )
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash CHAR(64) NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            revoked_at TIMESTAMPTZ,
+            last_used_at TIMESTAMPTZ,
+            user_agent VARCHAR(512),
+            ip_address INET
+        )
+        """
+    )
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
+    await conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auth_sessions_active
+        ON auth_sessions(expires_at, revoked_at)
+        """
+    )
+
+
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply all pending migrations."""
     async with pool.acquire() as conn:
@@ -336,6 +376,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             ("skycast_add_forecast_indexes", _migration_add_forecast_indexes),
             ("skycast_create_raw_layers", _migration_create_raw_layers),
             ("skycast_create_dm_forecast_errors", _migration_create_dm_forecast_errors),
+            ("skycast_create_users_and_auth", _migration_create_users_and_auth),
         ]
 
         for name, fn in migrations:

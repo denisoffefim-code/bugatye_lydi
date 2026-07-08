@@ -60,6 +60,8 @@ class Settings:
     outbox_spool_dir: str = os.getenv("OUTBOX_SPOOL_DIR", ".skycast-outbox-spool")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_json: bool = _get_bool("LOG_JSON", True)
+    auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
+    auth_password_hash_iterations: int = int(os.getenv("AUTH_PASSWORD_HASH_ITERATIONS", "390000"))
 
     def validate(self) -> None:
         if not self.database_url:
@@ -80,6 +82,10 @@ class Settings:
             raise RuntimeError("OUTBOX_MAX_ATTEMPTS must be >= 1")
         if self.outbox_spool_enabled and not self.outbox_spool_dir:
             raise RuntimeError("OUTBOX_SPOOL_DIR is required when OUTBOX_SPOOL_ENABLED=true")
+        if self.auth_session_ttl_hours < 1:
+            raise RuntimeError("AUTH_SESSION_TTL_HOURS must be >= 1")
+        if self.auth_password_hash_iterations < 100000:
+            raise RuntimeError("AUTH_PASSWORD_HASH_ITERATIONS must be >= 100000")
 
 
 settings = Settings()

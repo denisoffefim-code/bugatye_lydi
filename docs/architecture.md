@@ -10,6 +10,7 @@
 - `telemetry-service` для приема фактической погоды;
 - `analytics-api` для чтения агрегатов и аналитических представлений;
 - PostgreSQL как основной operational store;
+- `users` и `auth_sessions` в той же PostgreSQL для базового auth;
 - staging/raw слои внутри PostgreSQL с последующим переходом к отдельному DWH;
 - dev-запуск через `docker-compose`;
 - probes `live` / `ready` / `health`.
@@ -19,7 +20,7 @@
 - Redis Streams или Kafka;
 - S3/Object Storage для сырого архива;
 - отдельные Kubernetes-манифесты;
-- full auth flow и UI.
+- UI.
 
 ## Service Boundaries
 

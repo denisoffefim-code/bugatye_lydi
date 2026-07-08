@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 import aiohttp
@@ -13,9 +13,18 @@ try:
     import asyncpg
 except ModuleNotFoundError:  # pragma: no cover - helper tests may run without runtime deps
     asyncpg = Any  # type: ignore[assignment]
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from skycast.auth import (
+    extract_bearer_token,
+    generate_session_token,
+    hash_password,
+    hash_token,
+    normalize_email,
+    validate_password,
+    verify_password,
+)
 from skycast.clients import (
     AsyncRateLimiter,
     fetch_noaa_station_metadata,
@@ -66,6 +75,34 @@ class CoordinateBackfillRequest(BaseModel):
     dry_run: bool = False
 
 
+class UserRegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    full_name: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    last_login_at: datetime | None = None
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: UserOut
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.validate()
@@ -86,6 +123,86 @@ METRIC_SQL_MAP = {
     "max_temp": ("fv.max_temp", "wd.max_temp"),
     "precipitation": ("fv.precipitation", "wd.precipitation"),
 }
+
+
+def _auth_required_exception() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _invalid_credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="Invalid email or password",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _user_out_from_row(row: Any) -> UserOut:
+    return UserOut(
+        id=row["id"],
+        email=row["email"],
+        full_name=row["full_name"],
+        role=row["role"],
+        is_active=row["is_active"],
+        created_at=row["created_at"],
+        last_login_at=row["last_login_at"],
+    )
+
+
+async def _resolve_auth_context(request: Request, authorization: str | None) -> dict[str, Any]:
+    token = extract_bearer_token(authorization)
+    if token is None:
+        raise _auth_required_exception()
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                u.id,
+                u.email,
+                u.full_name,
+                u.role,
+                u.is_active,
+                u.created_at,
+                u.last_login_at,
+                s.id AS session_id
+            FROM auth_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = $1
+              AND s.revoked_at IS NULL
+              AND s.expires_at > NOW()
+            """,
+            hash_token(token),
+        )
+        if row is None or not row["is_active"]:
+            raise _auth_required_exception()
+
+        await conn.execute(
+            """
+            UPDATE auth_sessions
+            SET last_used_at = NOW()
+            WHERE id = $1
+            """,
+            row["session_id"],
+        )
+
+    return {
+        "session_id": row["session_id"],
+        "user": _user_out_from_row(row),
+        "client_ip": request.client.host if request.client else None,
+    }
+
+
+async def get_current_auth_context(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    return await _resolve_auth_context(request, authorization)
 
 
 async def _fetch_stations_for_forecast(
@@ -340,6 +457,133 @@ def _determine_forecast_run_status(*, saved_rows: int, error_count: int) -> str:
     return "failed"
 
 
+@app.post("/api/auth/register", response_model=UserOut, status_code=201)
+async def register_user(payload: UserRegisterRequest) -> UserOut:
+    try:
+        email = normalize_email(payload.email)
+        validate_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    full_name = payload.full_name.strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="full_name is required")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO users (email, full_name, password_hash)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (email) DO NOTHING
+            RETURNING id, email, full_name, role, is_active, created_at, last_login_at
+            """,
+            email,
+            full_name,
+            hash_password(payload.password, iterations=settings.auth_password_hash_iterations),
+        )
+        if row is None:
+            raise HTTPException(status_code=409, detail="User with this email already exists")
+
+    logger.info(
+        "user_registered",
+        extra={
+            "event": "user_registered",
+            "email": email,
+            "user_id": row["id"],
+        },
+    )
+    return _user_out_from_row(row)
+
+
+@app.post("/api/auth/login", response_model=AuthTokenResponse)
+async def login_user(payload: UserLoginRequest, request: Request) -> AuthTokenResponse:
+    try:
+        email = normalize_email(payload.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        user_row = await conn.fetchrow(
+            """
+            SELECT id, email, full_name, role, is_active, created_at, last_login_at, password_hash
+            FROM users
+            WHERE email = $1
+            """,
+            email,
+        )
+        if user_row is None or not verify_password(payload.password, user_row["password_hash"]):
+            raise _invalid_credentials_exception()
+        if not user_row["is_active"]:
+            raise HTTPException(status_code=403, detail="User is inactive")
+
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.auth_session_ttl_hours)
+        token = generate_session_token()
+        await conn.execute(
+            """
+            INSERT INTO auth_sessions (user_id, token_hash, expires_at, user_agent, ip_address)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            user_row["id"],
+            hash_token(token),
+            expires_at,
+            request.headers.get("user-agent"),
+            request.client.host if request.client else None,
+        )
+        user_row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET last_login_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, email, full_name, role, is_active, created_at, last_login_at
+            """,
+            user_row["id"],
+        )
+
+    logger.info(
+        "user_logged_in",
+        extra={
+            "event": "user_logged_in",
+            "email": email,
+            "user_id": user_row["id"],
+        },
+    )
+    return AuthTokenResponse(
+        access_token=token,
+        expires_at=expires_at,
+        user=_user_out_from_row(user_row),
+    )
+
+
+@app.post("/api/auth/logout", status_code=204)
+async def logout_user(current_auth: dict[str, Any] = Depends(get_current_auth_context)) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = NOW()
+            WHERE id = $1
+            """,
+            current_auth["session_id"],
+        )
+
+    logger.info(
+        "user_logged_out",
+        extra={
+            "event": "user_logged_out",
+            "user_id": current_auth["user"].id,
+        },
+    )
+
+
+@app.get("/api/auth/me", response_model=UserOut)
+async def auth_me(current_auth: dict[str, Any] = Depends(get_current_auth_context)) -> UserOut:
+    return current_auth["user"]
+
+
 async def _resolve_station_id(
     conn: asyncpg.Connection,
     *,
@@ -475,7 +719,10 @@ async def station_details(station_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/stations/backfill-coordinates")
-async def backfill_station_coordinates(request: CoordinateBackfillRequest) -> dict[str, Any]:
+async def backfill_station_coordinates(
+    request: CoordinateBackfillRequest,
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=settings.request_timeout_seconds)
     pool = get_pool()
 
@@ -532,6 +779,7 @@ async def backfill_station_coordinates(request: CoordinateBackfillRequest) -> di
         "station_backfill_completed",
         extra={
             "event": "station_backfill_completed",
+            "user_id": current_auth["user"].id,
             "dry_run": request.dry_run,
             "checked": len(stations),
             "matched": len(matched),
@@ -549,7 +797,10 @@ async def backfill_station_coordinates(request: CoordinateBackfillRequest) -> di
 
 
 @app.post("/api/telemetry")
-async def ingest_telemetry(records: list[TelemetryRecordIn]) -> dict[str, Any]:
+async def ingest_telemetry(
+    records: list[TelemetryRecordIn],
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
     if not records:
         raise HTTPException(status_code=400, detail="At least one telemetry record is required")
 
@@ -639,6 +890,7 @@ async def ingest_telemetry(records: list[TelemetryRecordIn]) -> dict[str, Any]:
         "telemetry_ingest_completed",
         extra={
             "event": "telemetry_ingest_completed",
+            "user_id": current_auth["user"].id,
             "processed": len(records),
             "inserted": inserted,
             "updated": updated,
@@ -648,7 +900,10 @@ async def ingest_telemetry(records: list[TelemetryRecordIn]) -> dict[str, Any]:
 
 
 @app.post("/api/forecasts/fetch")
-async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
+async def fetch_forecasts(
+    request: ForecastFetchRequest,
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
     if request.end_date < request.start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
@@ -670,6 +925,7 @@ async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
             "forecast_run_started",
             extra={
                 "event": "forecast_run_started",
+                "user_id": current_auth["user"].id,
                 "run_id": run_id,
                 "stations_requested": len(stations),
                 "start_date": request.start_date.isoformat(),
@@ -753,6 +1009,7 @@ async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
                             "forecast_station_fetch_failed",
                             extra={
                                 "event": "forecast_station_fetch_failed",
+                                "user_id": current_auth["user"].id,
                                 "run_id": run_id,
                                 "station_id": station["id"],
                                 "wmo_index": station["wmo_index"],
@@ -786,6 +1043,7 @@ async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
             "forecast_run_completed",
             extra={
                 "event": "forecast_run_completed",
+                "user_id": current_auth["user"].id,
                 "run_id": run_id,
                 "status": final_status,
                 "stations_requested": len(stations),
@@ -808,6 +1066,7 @@ async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
             "forecast_run_failed",
             extra={
                 "event": "forecast_run_failed",
+                "user_id": current_auth["user"].id,
                 "run_id": run_id,
                 "error": str(exc),
             },
