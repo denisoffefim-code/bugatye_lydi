@@ -9,23 +9,42 @@ from typing import Iterable
 import aiohttp
 import asyncpg
 
-from loader import (
-    DEFAULT_ATM8C_BATCH_SIZE,
-    DEFAULT_DOWNLOAD_CHUNK_SIZE,
-    DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
-    DEFAULT_HTTP_SOCK_READ_TIMEOUT_SECONDS,
-    DEFAULT_HTTP_TOTAL_TIMEOUT_SECONDS,
-    DEFAULT_INITIAL_RETRY_DELAY_SECONDS,
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_SROK8C_BATCH_SIZE,
-    DEFAULT_WEATHER_BATCH_SIZE,
-    configure_loader,
-    load_atm8c_data,
-    load_srok8c_data,
-    load_stations,
-    load_weather_data,
-)
-from migration import run_migration
+try:
+    from .loader import (
+        DEFAULT_ATM8C_BATCH_SIZE,
+        DEFAULT_DOWNLOAD_CHUNK_SIZE,
+        DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_SOCK_READ_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_TOTAL_TIMEOUT_SECONDS,
+        DEFAULT_INITIAL_RETRY_DELAY_SECONDS,
+        DEFAULT_MAX_RETRIES,
+        DEFAULT_SROK8C_BATCH_SIZE,
+        DEFAULT_WEATHER_BATCH_SIZE,
+        configure_loader,
+        load_atm8c_data,
+        load_srok8c_data,
+        load_stations,
+        load_weather_data,
+    )
+    from .migration import run_migration
+except ImportError:
+    from loader import (
+        DEFAULT_ATM8C_BATCH_SIZE,
+        DEFAULT_DOWNLOAD_CHUNK_SIZE,
+        DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_SOCK_READ_TIMEOUT_SECONDS,
+        DEFAULT_HTTP_TOTAL_TIMEOUT_SECONDS,
+        DEFAULT_INITIAL_RETRY_DELAY_SECONDS,
+        DEFAULT_MAX_RETRIES,
+        DEFAULT_SROK8C_BATCH_SIZE,
+        DEFAULT_WEATHER_BATCH_SIZE,
+        configure_loader,
+        load_atm8c_data,
+        load_srok8c_data,
+        load_stations,
+        load_weather_data,
+    )
+    from migration import run_migration
 
 
 DEFAULT_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"

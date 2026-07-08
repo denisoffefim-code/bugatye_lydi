@@ -7,8 +7,12 @@ from typing import Optional
 import asyncpg
 from aiohttp import web
 
-from loader import run_initial_load
-from migration import run_migration
+try:
+    from .loader import run_initial_load
+    from .migration import run_migration
+except ImportError:
+    from loader import run_initial_load
+    from migration import run_migration
 
 
 DB_URL = os.getenv(

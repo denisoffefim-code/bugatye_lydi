@@ -1,7 +1,28 @@
 services:
-  skycast:
+  forecast-service:
     build: .
     env_file:
       - .env
+    environment:
+      APP_MODULE: forecast_service.app:app
+      APP_PORT: 8081
     ports:
-      - "8080:8080"
+      - "8081:8081"
+  telemetry-service:
+    build: .
+    env_file:
+      - .env
+    environment:
+      APP_MODULE: telemetry_service.app:app
+      APP_PORT: 8082
+    ports:
+      - "8082:8082"
+  analytics-api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      APP_MODULE: analytics_api.app:app
+      APP_PORT: 8083
+    ports:
+      - "8083:8083"

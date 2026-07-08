@@ -1,0 +1,38 @@
+Зафиксировать scope и архитектуру.
+Цель первой версии: показать самые большие ошибки прогноза по станциям и датам, но уже в виде системы из трех сервисов и отдельного аналитического слоя.
+
+Разделить текущий backend на 3 сервиса.
+forecast-service: периодически тянет прогнозы, пишет в очередь или staging.
+telemetry-service: принимает факт погоды, валидирует, дедуплицирует, пишет в ingest/raw.
+analytics-api: читает подготовленные витрины и отдает UI.
+
+Выстроить хранение данных.
+PostgreSQL как OLTP и ingest.
+S3/Object Storage для сырого исторического архива.
+DWH-слои: raw -> ods -> dm.
+Витрина dm_forecast_errors: station/date/model/horizon/forecast/actual/absolute_error/rank.
+Отдельно описать backfill-процессы и дедупликацию.
+
+Добавить надежность.
+Очередь Redis streams или Kafka.
+Retry/backoff уже частично есть, но нужен вынос на уровень producer/consumer.
+Локальный spool/outbox при недоступности внешних систем.
+Идемпотентность загрузки прогноза и телеметрии.
+Health/readiness/liveness.
+
+Подготовить деплой.
+docker-compose для dev.
+Deployment, Service, Ingress, ConfigMap, Secret, HPA для Kubernetes в Yandex Cloud.
+Отдельно описать, как живут две версии приложения одновременно.
+
+Добавить observability.
+Метрики запросов, latency, error rate, queue lag, ingest lag.
+Structured logs.
+OpenTelemetry tracing.
+Alert rules на падение ingest, рост ошибок прогноза, недоступность БД/очереди.
+
+Сделать frontend и auth.
+Login, роли admin/analyst/viewer.
+Дашборд по регионам/станциям.
+Топ самых больших ошибок.
+Историческая аналитика и алерты.
