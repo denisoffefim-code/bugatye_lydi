@@ -137,11 +137,11 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["returned"], 0)
         query, args = conn.fetch_calls[0]
         self.assertNotIn("source =", query)
-        self.assertIn("horizon_days = $5", query)
+        self.assertIn("fv.horizon_days = $4", query)
         self.assertEqual(response["source"], "forecast")
         self.assertEqual(
             args,
-            ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), "best_match", 2, 20),
+            (date(2026, 7, 1), date(2026, 7, 10), "best_match", 2, 20),
         )
 
     async def test_top_errors_defaults_blank_source_to_forecast(self) -> None:
@@ -160,7 +160,7 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["source"], "forecast")
         query, args = conn.fetch_calls[0]
         self.assertNotIn("source =", query)
-        self.assertEqual(args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), 20))
+        self.assertEqual(args, (date(2026, 7, 1), date(2026, 7, 10), 20))
 
     async def test_top_errors_returns_unique_stations(self) -> None:
         conn = _RecordingConnection(
@@ -201,18 +201,16 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["returned"], 1)
         self.assertEqual(response["items"][0]["station_id"], 1)
         query, args = conn.fetch_calls[0]
-        self.assertIn("WITH station_top_errors AS", query)
-        self.assertIn("SELECT DISTINCT ON (station_id)", query)
-        self.assertIn("ORDER BY station_id, absolute_error DESC, forecast_date DESC, horizon_days ASC", query)
-        self.assertEqual(args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), 20))
+        self.assertIn("WITH latest_forecast AS", query)
+        self.assertIn(", station_top_errors AS", query)
+        self.assertIn("SELECT DISTINCT ON (lf.station_id)", query)
+        self.assertIn("ORDER BY absolute_error DESC, forecast_date DESC, horizon_days ASC", query)
+        self.assertEqual(args, (date(2026, 7, 1), date(2026, 7, 10), 20))
 
     async def test_analytics_summary_ignores_blank_model_filter(self) -> None:
         conn = _RecordingConnection(
+            fetch_results=[[]],
             fetchrow_results=[
-                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
-                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
-                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
-                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
                 {"stations_total": 0, "actual_rows": 0, "forecast_rows": 0, "atm8c_rows": 0, "srok8c_rows": 0},
             ]
         )
@@ -224,17 +222,17 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
                 model="",
                 source="",
                 horizon_days=None,
-            )
+        )
 
         self.assertIsNone(response["model"])
         self.assertEqual(response["source"], "forecast")
-        metric_query, metric_args = conn.fetchrow_calls[0]
-        totals_query, totals_args = conn.fetchrow_calls[-1]
+        metric_query, metric_args = conn.fetch_calls[0]
+        totals_query, totals_args = conn.fetchrow_calls[0]
         self.assertNotIn("model = ", metric_query)
         self.assertNotIn("fr.model = ", totals_query)
         self.assertNotIn("source =", metric_query)
         self.assertNotIn("COALESCE(fr.request_payload->>'source', 'forecast') =", totals_query)
-        self.assertEqual(metric_args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10)))
+        self.assertEqual(metric_args, (date(2026, 7, 1), date(2026, 7, 10)))
         self.assertEqual(totals_args, (date(2026, 7, 1), date(2026, 7, 10)))
 
     async def test_station_series_keeps_horizon_model_and_source_dimensions(self) -> None:

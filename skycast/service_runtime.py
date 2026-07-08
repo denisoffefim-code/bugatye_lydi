@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
+from skycast.cache import close_redis_client
 from skycast.config import settings
 from skycast.db import close_pool, get_pool, init_pool
 from skycast.logging_utils import configure_logging
@@ -50,6 +51,7 @@ def create_service_lifespan(title: str, *, migrate_on_startup: bool | None = Non
             yield
         finally:
             logger.info("service_stopping", extra={"event": "service_stopping"})
+            await close_redis_client()
             await close_pool()
             logger.info("service_stopped", extra={"event": "service_stopped"})
 

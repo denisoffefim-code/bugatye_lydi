@@ -88,6 +88,8 @@ class Settings:
     outbox_spool_dir: str = os.getenv("OUTBOX_SPOOL_DIR", ".skycast-outbox-spool")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_json: bool = _get_bool("LOG_JSON", True)
+    analytics_cache_enabled: bool = _get_bool("ANALYTICS_CACHE_ENABLED", True)
+    analytics_cache_ttl_seconds: int = int(os.getenv("ANALYTICS_CACHE_TTL_SECONDS", "300"))
     auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
     auth_password_hash_iterations: int = int(os.getenv("AUTH_PASSWORD_HASH_ITERATIONS", "390000"))
 
@@ -117,6 +119,8 @@ class Settings:
             raise RuntimeError("OUTBOX_MAX_ATTEMPTS must be >= 1")
         if self.outbox_spool_enabled and not self.outbox_spool_dir:
             raise RuntimeError("OUTBOX_SPOOL_DIR is required when OUTBOX_SPOOL_ENABLED=true")
+        if self.analytics_cache_enabled and self.analytics_cache_ttl_seconds < 1:
+            raise RuntimeError("ANALYTICS_CACHE_TTL_SECONDS must be >= 1 when ANALYTICS_CACHE_ENABLED=true")
         if self.auth_session_ttl_hours < 1:
             raise RuntimeError("AUTH_SESSION_TTL_HOURS must be >= 1")
         if self.auth_password_hash_iterations < 100000:

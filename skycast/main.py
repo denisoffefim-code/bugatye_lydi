@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - helper tests may run without r
     asyncpg = Any  # type: ignore[assignment]
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from skycast.auth import (
@@ -26,6 +27,7 @@ from skycast.auth import (
     validate_password,
     verify_password,
 )
+from skycast.cache import close_redis_client, invalidate_analytics_cache, maybe_cached_json_response
 from skycast.clients import (
     AsyncRateLimiter,
     fetch_noaa_station_metadata,
@@ -122,6 +124,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await close_redis_client()
         await close_pool()
 
 
@@ -263,6 +266,53 @@ def _append_station_series_filters(
 ) -> None:
     _append_sql_filter(clauses, args, "fr.model", model)
     _append_sql_filter(clauses, args, "fv.horizon_days", horizon_days)
+
+
+def _append_latest_forecast_window_filters(
+    clauses: list[str],
+    args: list[Any],
+    *,
+    start_date: date,
+    end_date: date,
+    model: str | None,
+    horizon_days: int | None,
+) -> None:
+    clauses.append(f"fv.forecast_date BETWEEN ${len(args) + 1} AND ${len(args) + 2}")
+    args.extend([start_date, end_date])
+    _append_sql_filter(clauses, args, "fr.model", model)
+    _append_sql_filter(clauses, args, "fv.horizon_days", horizon_days)
+
+
+def _metric_forecast_column_sql(metric: str) -> str:
+    return METRIC_SQL_MAP[metric][0]
+
+
+def _metric_actual_column_sql(metric: str) -> str:
+    return METRIC_SQL_MAP[metric][1]
+
+
+def _latest_forecast_cte_sql(
+    *,
+    select_fields: list[str],
+    where_clauses: list[str],
+) -> str:
+    return f"""
+        WITH latest_forecast AS (
+            SELECT DISTINCT ON ({latest_forecast_identity_sql()})
+                fv.station_id,
+                fv.forecast_date,
+                fv.horizon_days,
+                fr.provider,
+                fr.model,
+                {FORECAST_SOURCE_SQL} AS source,
+                fr.run_at,
+                {', '.join(select_fields)}
+            FROM forecast_values fv
+            JOIN forecast_runs fr ON fr.id = fv.run_id
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY {latest_forecast_order_by_sql()}
+        )
+    """
 
 
 def _user_out_from_row(row: Any) -> UserOut:
@@ -959,6 +1009,8 @@ async def backfill_station_coordinates(
             "missing": len(missing),
         },
     )
+    if matched and not request.dry_run:
+        await invalidate_analytics_cache()
     return {
         "dry_run": request.dry_run,
         "checked": len(stations),
@@ -1069,6 +1121,8 @@ async def ingest_telemetry(
             "updated": updated,
         },
     )
+    if inserted or updated:
+        await invalidate_analytics_cache()
     return {"inserted": inserted, "updated": updated, "processed": len(records)}
 
 
@@ -1244,6 +1298,8 @@ async def fetch_forecasts(
                 "publish_outbox_events": request.publish_outbox_events,
             },
         )
+        if saved_rows:
+            await invalidate_analytics_cache()
         return {
             "run_id": run_id,
             "stations_requested": len(stations),
@@ -1334,7 +1390,7 @@ async def list_forecast_runs(
     return {"returned": len(rows), "runs": [dict(row) for row in rows]}
 
 
-@app.get("/api/analytics/top-errors")
+@app.get("/api/analytics/top-errors", response_model=None)
 async def top_errors(
     start_date: date,
     end_date: date,
@@ -1344,51 +1400,77 @@ async def top_errors(
     model: str | None = None,
     source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    request: Request = None,
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
-) -> dict[str, Any]:
+) -> Any:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
     model = _normalize_optional_query_text(model)
     source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
-    coordinates_filter = ""
-    if only_with_coordinates:
-        coordinates_filter = "AND latitude IS NOT NULL AND longitude IS NOT NULL"
-
-    clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
-    args: list[Any] = [metric, start_date, end_date]
-    _append_dm_forecast_filters(
-        clauses,
+    forecast_column = _metric_forecast_column_sql(metric)
+    actual_column = _metric_actual_column_sql(metric)
+    latest_forecast_clauses = ["fr.status IN ('success', 'partial_failed')"]
+    args: list[Any] = []
+    _append_latest_forecast_window_filters(
+        latest_forecast_clauses,
         args,
+        start_date=start_date,
+        end_date=end_date,
         model=model,
-        source=source_filter,
         horizon_days=horizon_days,
     )
+    latest_forecast_clauses.append(f"{forecast_column} IS NOT NULL")
 
-    query = f"""
-        WITH station_top_errors AS (
-            SELECT DISTINCT ON (station_id)
-                station_id,
-                wmo_index,
-                name,
-                country,
-                latitude,
-                longitude,
-                forecast_date,
-                horizon_days,
-                provider,
-                model,
-                source,
-                run_at,
-                forecast_value,
-                actual_value,
-                signed_error,
-                absolute_error,
-                error_rank
-            FROM dm_forecast_errors
-            WHERE {' AND '.join(clauses)}
-              {coordinates_filter}
-            ORDER BY station_id, absolute_error DESC, forecast_date DESC, horizon_days ASC
+    station_filters = [f"{actual_column} IS NOT NULL"]
+    if only_with_coordinates:
+        station_filters.append("s.latitude IS NOT NULL")
+        station_filters.append("s.longitude IS NOT NULL")
+
+    query = (
+        _latest_forecast_cte_sql(
+            select_fields=[f"{forecast_column} AS forecast_value"],
+            where_clauses=latest_forecast_clauses,
+        )
+        + f"""
+        , station_top_errors AS (
+            SELECT DISTINCT ON (lf.station_id)
+                s.id AS station_id,
+                s.wmo_index,
+                s.name,
+                s.country,
+                s.latitude,
+                s.longitude,
+                lf.forecast_date,
+                lf.horizon_days,
+                lf.provider,
+                lf.model,
+                lf.source,
+                lf.run_at,
+                ROUND(lf.forecast_value::numeric, 2) AS forecast_value,
+                ROUND({actual_column}::numeric, 2) AS actual_value,
+                ROUND((lf.forecast_value - {actual_column})::numeric, 2) AS signed_error,
+                ROUND(ABS(lf.forecast_value - {actual_column})::numeric, 2) AS absolute_error
+            FROM latest_forecast lf
+            JOIN weather_data wd
+              ON wd.station_id = lf.station_id
+             AND wd.observation_date = lf.forecast_date
+            JOIN stations s
+              ON s.id = lf.station_id
+            WHERE {' AND '.join(station_filters)}
+            ORDER BY
+                lf.station_id,
+                ABS(lf.forecast_value - {actual_column}) DESC,
+                lf.forecast_date DESC,
+                lf.horizon_days ASC
+        ),
+        ranked_station_top_errors AS (
+            SELECT
+                *,
+                DENSE_RANK() OVER (
+                    ORDER BY absolute_error DESC, forecast_date DESC
+                ) AS error_rank
+            FROM station_top_errors
         )
         SELECT
             station_id,
@@ -1408,28 +1490,35 @@ async def top_errors(
             signed_error,
             absolute_error,
             error_rank
-        FROM station_top_errors
+        FROM ranked_station_top_errors
         ORDER BY absolute_error DESC, forecast_date DESC, horizon_days ASC
         LIMIT ${len(args) + 1}
     """
+    )
 
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query, *args, limit)
+    async def _load_payload() -> dict[str, Any]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, *args, limit)
+        return {
+            "metric": metric,
+            "start_date": start_date,
+            "end_date": end_date,
+            "model": model,
+            "source": source_filter,
+            "horizon_days": horizon_days,
+            "returned": len(rows),
+            "items": [dict(row) for row in rows],
+        }
 
-    return {
-        "metric": metric,
-        "start_date": start_date,
-        "end_date": end_date,
-        "model": model,
-        "source": source_filter,
-        "horizon_days": horizon_days,
-        "returned": len(rows),
-        "items": [dict(row) for row in rows],
-    }
+    return await maybe_cached_json_response(
+        request,
+        namespace="top-errors",
+        loader=_load_payload,
+    )
 
 
-@app.get("/api/analytics/summary")
+@app.get("/api/analytics/summary", response_model=None)
 async def analytics_summary(
     start_date: date,
     end_date: date,
@@ -1437,79 +1526,165 @@ async def analytics_summary(
     model: str | None = None,
     source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    request: Request = None,
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
-) -> dict[str, Any]:
+) -> Any:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
     model = _normalize_optional_query_text(model)
     source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
-    coordinates_filter = ""
-    if only_with_coordinates:
-        coordinates_filter = "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+    latest_forecast_clauses = ["fr.status IN ('success', 'partial_failed')"]
+    metric_args: list[Any] = []
+    _append_latest_forecast_window_filters(
+        latest_forecast_clauses,
+        metric_args,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        horizon_days=horizon_days,
+    )
 
-    pool = get_pool()
-    metrics: dict[str, Any] = {}
-    async with pool.acquire() as conn:
-        for metric in METRIC_SQL_MAP:
-            clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
-            args: list[Any] = [metric, start_date, end_date]
-            _append_dm_forecast_filters(
-                clauses,
-                args,
-                model=model,
-                source=source_filter,
-                horizon_days=horizon_days,
-            )
-            row = await conn.fetchrow(
+    station_filters: list[str] = []
+    if only_with_coordinates:
+        station_filters.extend(["s.latitude IS NOT NULL", "s.longitude IS NOT NULL"])
+    station_where_sql = f"WHERE {' AND '.join(station_filters)}" if station_filters else ""
+
+    metrics_query = (
+        _latest_forecast_cte_sql(
+            select_fields=[
+                "fv.avg_temp",
+                "fv.min_temp",
+                "fv.max_temp",
+                "fv.precipitation",
+            ],
+            where_clauses=latest_forecast_clauses,
+        )
+        + f"""
+        , metric_rows AS (
+            SELECT
+                metric_values.metric,
+                metric_values.forecast_value,
+                metric_values.actual_value
+            FROM latest_forecast lf
+            JOIN weather_data wd
+              ON wd.station_id = lf.station_id
+             AND wd.observation_date = lf.forecast_date
+            JOIN stations s
+              ON s.id = lf.station_id
+            CROSS JOIN LATERAL (
+                VALUES
+                    ('avg_temp', lf.avg_temp::numeric, wd.avg_temp::numeric),
+                    ('min_temp', lf.min_temp::numeric, wd.min_temp::numeric),
+                    ('max_temp', lf.max_temp::numeric, wd.max_temp::numeric),
+                    ('precipitation', lf.precipitation::numeric, wd.precipitation::numeric)
+            ) AS metric_values(metric, forecast_value, actual_value)
+            {station_where_sql}
+        )
+        SELECT
+            metric,
+            COUNT(*) FILTER (
+                WHERE forecast_value IS NOT NULL
+                  AND actual_value IS NOT NULL
+            ) AS compared_points,
+            ROUND(
+                AVG(ABS(forecast_value - actual_value)) FILTER (
+                    WHERE forecast_value IS NOT NULL
+                      AND actual_value IS NOT NULL
+                ),
+                2
+            ) AS mae,
+            ROUND(
+                SQRT(
+                    AVG(POWER(forecast_value - actual_value, 2)) FILTER (
+                        WHERE forecast_value IS NOT NULL
+                          AND actual_value IS NOT NULL
+                    )
+                ),
+                2
+            ) AS rmse,
+            ROUND(
+                AVG(forecast_value - actual_value) FILTER (
+                    WHERE forecast_value IS NOT NULL
+                      AND actual_value IS NOT NULL
+                ),
+                2
+            ) AS bias,
+            ROUND(
+                MAX(ABS(forecast_value - actual_value)) FILTER (
+                    WHERE forecast_value IS NOT NULL
+                      AND actual_value IS NOT NULL
+                ),
+                2
+            ) AS max_absolute_error
+        FROM metric_rows
+        GROUP BY metric
+    """
+    )
+
+    forecast_value_clauses = ["fv.forecast_date BETWEEN $1 AND $2"]
+    forecast_value_args: list[Any] = [start_date, end_date]
+    _append_sql_filter(forecast_value_clauses, forecast_value_args, "fr.model", model)
+    _append_sql_filter(forecast_value_clauses, forecast_value_args, "fv.horizon_days", horizon_days)
+
+    async def _load_payload() -> dict[str, Any]:
+        metrics: dict[str, Any] = {
+            metric_name: {
+                "compared_points": 0,
+                "mae": None,
+                "rmse": None,
+                "bias": None,
+                "max_absolute_error": None,
+            }
+            for metric_name in METRIC_SQL_MAP
+        }
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            metric_rows = await conn.fetch(metrics_query, *metric_args)
+            for row in metric_rows:
+                metrics[row["metric"]] = {
+                    "compared_points": row["compared_points"],
+                    "mae": row["mae"],
+                    "rmse": row["rmse"],
+                    "bias": row["bias"],
+                    "max_absolute_error": row["max_absolute_error"],
+                }
+
+            totals = await conn.fetchrow(
                 f"""
                 SELECT
-                    COUNT(*) AS compared_points,
-                    ROUND(AVG(absolute_error), 2) AS mae,
-                    ROUND(SQRT(AVG(POWER(signed_error, 2))), 2) AS rmse,
-                    ROUND(AVG(signed_error), 2) AS bias,
-                    ROUND(MAX(absolute_error), 2) AS max_absolute_error
-                FROM dm_forecast_errors
-                WHERE {' AND '.join(clauses)}
-                  {coordinates_filter}
+                    (SELECT COUNT(*) FROM stations) AS stations_total,
+                    (SELECT COUNT(*) FROM weather_data WHERE observation_date BETWEEN $1 AND $2) AS actual_rows,
+                    (
+                        SELECT COUNT(*)
+                        FROM forecast_values fv
+                        JOIN forecast_runs fr ON fr.id = fv.run_id
+                        WHERE {' AND '.join(forecast_value_clauses)}
+                    ) AS forecast_rows,
+                    (SELECT COUNT(*) FROM atm8c_data) AS atm8c_rows,
+                    (SELECT COUNT(*) FROM srok8c_data) AS srok8c_rows
                 """,
-                *args,
+                *forecast_value_args,
             )
-            metrics[metric] = dict(row)
 
-        forecast_value_clauses = ["fv.forecast_date BETWEEN $1 AND $2"]
-        forecast_value_args: list[Any] = [start_date, end_date]
-        _append_sql_filter(forecast_value_clauses, forecast_value_args, "fr.model", model)
-        _append_sql_filter(forecast_value_clauses, forecast_value_args, "fv.horizon_days", horizon_days)
-        totals = await conn.fetchrow(
-            f"""
-            SELECT
-                (SELECT COUNT(*) FROM stations) AS stations_total,
-                (SELECT COUNT(*) FROM weather_data WHERE observation_date BETWEEN $1 AND $2) AS actual_rows,
-                (
-                    SELECT COUNT(*)
-                    FROM forecast_values fv
-                    JOIN forecast_runs fr ON fr.id = fv.run_id
-                    WHERE {' AND '.join(forecast_value_clauses)}
-                ) AS forecast_rows,
-                (SELECT COUNT(*) FROM atm8c_data) AS atm8c_rows,
-                (SELECT COUNT(*) FROM srok8c_data) AS srok8c_rows
-            """,
-            *forecast_value_args,
-        )
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "model": model,
+            "source": source_filter,
+            "horizon_days": horizon_days,
+            "metrics": metrics,
+            "totals": dict(totals),
+        }
 
-    return {
-        "start_date": start_date,
-        "end_date": end_date,
-        "model": model,
-        "source": source_filter,
-        "horizon_days": horizon_days,
-        "metrics": metrics,
-        "totals": dict(totals),
-    }
+    return await maybe_cached_json_response(
+        request,
+        namespace="summary",
+        loader=_load_payload,
+    )
 
 
-@app.get("/api/analytics/worst-stations")
+@app.get("/api/analytics/worst-stations", response_model=None)
 async def worst_stations(
     start_date: date,
     end_date: date,
@@ -1518,24 +1693,51 @@ async def worst_stations(
     model: str | None = None,
     source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    request: Request = None,
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
-) -> dict[str, Any]:
+) -> Any:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
     model = _normalize_optional_query_text(model)
     source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
-    clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
-    args: list[Any] = [metric, start_date, end_date]
-    _append_dm_forecast_filters(
-        clauses,
+    forecast_column = _metric_forecast_column_sql(metric)
+    actual_column = _metric_actual_column_sql(metric)
+    latest_forecast_clauses = ["fr.status IN ('success', 'partial_failed')"]
+    args: list[Any] = []
+    _append_latest_forecast_window_filters(
+        latest_forecast_clauses,
         args,
+        start_date=start_date,
+        end_date=end_date,
         model=model,
-        source=source_filter,
         horizon_days=horizon_days,
     )
+    latest_forecast_clauses.append(f"{forecast_column} IS NOT NULL")
 
-    query = f"""
+    query = (
+        _latest_forecast_cte_sql(
+            select_fields=[f"{forecast_column} AS forecast_value"],
+            where_clauses=latest_forecast_clauses,
+        )
+        + f"""
+        , metric_rows AS (
+            SELECT
+                s.id AS station_id,
+                s.wmo_index,
+                s.name,
+                s.country,
+                s.latitude,
+                s.longitude,
+                ABS(lf.forecast_value - {actual_column}) AS absolute_error
+            FROM latest_forecast lf
+            JOIN weather_data wd
+              ON wd.station_id = lf.station_id
+             AND wd.observation_date = lf.forecast_date
+            JOIN stations s
+              ON s.id = lf.station_id
+            WHERE {actual_column} IS NOT NULL
+        )
         SELECT
             station_id,
             wmo_index,
@@ -1546,27 +1748,33 @@ async def worst_stations(
             COUNT(*) AS compared_points,
             ROUND(AVG(absolute_error), 2) AS mae,
             ROUND(MAX(absolute_error), 2) AS max_absolute_error
-        FROM dm_forecast_errors
-        WHERE {' AND '.join(clauses)}
+        FROM metric_rows
         GROUP BY station_id, wmo_index, name, country, latitude, longitude
         ORDER BY mae DESC NULLS LAST, max_absolute_error DESC NULLS LAST
         LIMIT ${len(args) + 1}
     """
+    )
 
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query, *args, limit)
+    async def _load_payload() -> dict[str, Any]:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, *args, limit)
+        return {
+            "metric": metric,
+            "start_date": start_date,
+            "end_date": end_date,
+            "model": model,
+            "source": source_filter,
+            "horizon_days": horizon_days,
+            "returned": len(rows),
+            "items": [dict(row) for row in rows],
+        }
 
-    return {
-        "metric": metric,
-        "start_date": start_date,
-        "end_date": end_date,
-        "model": model,
-        "source": source_filter,
-        "horizon_days": horizon_days,
-        "returned": len(rows),
-        "items": [dict(row) for row in rows],
-    }
+    return await maybe_cached_json_response(
+        request,
+        namespace="worst-stations",
+        loader=_load_payload,
+    )
 
 
 @app.get("/api/analytics/station-series")
