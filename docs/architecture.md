@@ -114,6 +114,13 @@
   - `absolute_error`
   - `error_rank`
 
+Контракт `latest forecast`:
+
+- идентичность прогноза задается ключом `station_id + forecast_date + horizon_days + provider + model + source`;
+- аналитика и `station-series` выбирают запись с максимальным `run_at` внутри этого ключа;
+- если `run_at` совпал, tie-break идет по `forecast_runs.id DESC`, затем по `forecast_values.id DESC`;
+- разные `horizon_days`, `model` или `source` не схлопываются в одну запись и живут как отдельные forecast variants.
+
 ## Reliability
 
 На текущем шаге уже нужны:

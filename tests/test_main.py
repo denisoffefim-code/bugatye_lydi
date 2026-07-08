@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from skycast.forecast_contract import latest_forecast_identity_sql, latest_forecast_order_by_sql
 from skycast.main import (
     _determine_forecast_run_status,
     forecast_coverage,
@@ -161,9 +162,12 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["returned"], 1)
         query, args = conn.fetch_calls[0]
-        self.assertIn("DISTINCT ON (", query)
+        self.assertIn(f"DISTINCT ON ({latest_forecast_identity_sql()})", query)
         self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') AS source", query)
         self.assertIn("fv.horizon_days = $6", query)
+        self.assertIn(f"ORDER BY {latest_forecast_order_by_sql()}", query)
+        self.assertIn("fr.id DESC", query)
+        self.assertIn("fv.id DESC", query)
         self.assertEqual(
             args,
             (1, date(2026, 7, 1), date(2026, 7, 2), "best_match", "previous_runs", 2),

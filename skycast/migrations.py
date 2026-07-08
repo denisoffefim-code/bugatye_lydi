@@ -9,6 +9,12 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - helper tests may run without runtime deps
     asyncpg = Any  # type: ignore[assignment]
 
+from skycast.forecast_contract import (
+    FORECAST_SOURCE_SQL,
+    latest_forecast_identity_sql,
+    latest_forecast_order_by_sql,
+)
+
 
 MigrationFn = Callable[[asyncpg.Connection], Awaitable[None]]
 
@@ -180,20 +186,15 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
         """
         CREATE VIEW dm_forecast_errors AS
         WITH latest_forecast AS (
-            SELECT DISTINCT ON (
+            SELECT DISTINCT ON ("""
+        + latest_forecast_identity_sql()
+        + f""")
                 fv.station_id,
                 fv.forecast_date,
                 fv.horizon_days,
                 fr.provider,
                 fr.model,
-                COALESCE(fr.request_payload->>'source', 'forecast')
-            )
-                fv.station_id,
-                fv.forecast_date,
-                fv.horizon_days,
-                fr.provider,
-                fr.model,
-                COALESCE(fr.request_payload->>'source', 'forecast') AS source,
+                {FORECAST_SOURCE_SQL} AS source,
                 fr.run_at,
                 fv.avg_temp,
                 fv.min_temp,
@@ -202,14 +203,9 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
             FROM forecast_values fv
             JOIN forecast_runs fr ON fr.id = fv.run_id
             WHERE fr.status IN ('success', 'partial_failed')
-            ORDER BY
-                fv.station_id,
-                fv.forecast_date,
-                fv.horizon_days,
-                fr.provider,
-                fr.model,
-                COALESCE(fr.request_payload->>'source', 'forecast'),
-                fr.run_at DESC
+            ORDER BY """
+        + latest_forecast_order_by_sql()
+        + """
         ),
         metric_rows AS (
             SELECT

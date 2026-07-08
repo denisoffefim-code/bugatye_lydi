@@ -13,7 +13,8 @@
 - есть safe rerun / bulk backfill runbook в `docs/backfill_runbook.md`;
 - есть RBAC с ролями `admin/analyst/viewer` и endpoint-level checks;
 - есть admin-only операции для forecast fetch / station coordinate backfill / service coverage / revoke user sessions;
-- есть smoke-тесты ролей и отказа в доступе.
+- есть smoke-тесты ролей и отказа в доступе;
+- зафиксирован контракт `latest forecast` в коде, тестах и документации.
 
 Сейчас в фокусе:
 - Догрузить historical backfill Open-Meteo `previous_runs` по всем станциям с координатами и горизонтам `1..7`.
@@ -27,7 +28,6 @@ P0. Довести backend до рабочего production-like состоян�
 
 2. Аналитика и read models
 - Проверить, нужны ли отдельные `dm_*` витрины помимо `dm_forecast_errors`: coverage, station series, summary by station/model/horizon.
-- Зафиксировать контракт аналитики: какая запись считается `latest forecast` для одной даты при нескольких `horizon/model/source`.
 
 3. Auth и доступ
 - Вынести auth surface в понятную deployment-схему для split services: отдельный auth/gateway endpoint или общий edge-service.

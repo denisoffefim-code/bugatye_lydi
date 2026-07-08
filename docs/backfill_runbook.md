@@ -32,7 +32,8 @@ python data_loaders/load_open_meteo_backfill.py \
 
 - Повторный запуск безопасен: каждый rerun создает новый `forecast_runs.id`.
 - Данные одного run идемпотентны внутри себя за счет `UNIQUE (run_id, station_id, forecast_date)` в `forecast_values`.
-- Аналитика выбирает latest forecast по `run_at DESC` внутри одинакового набора `forecast_date + horizon_days + provider + model + source`.
+- Аналитика выбирает latest forecast внутри ключа `station_id + forecast_date + horizon_days + provider + model + source`.
+- Основной порядок выбора: `run_at DESC`; tie-break: `forecast_runs.id DESC`, затем `forecast_values.id DESC`.
 - Старые historical runs сохраняются для аудита и сравнения, но не должны побеждать более новый rerun в аналитике.
 
 ## Retry policy

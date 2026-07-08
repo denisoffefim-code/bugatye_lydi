@@ -34,6 +34,11 @@ from skycast.clients import (
 )
 from skycast.config import settings
 from skycast.db import close_pool, get_pool, init_pool
+from skycast.forecast_contract import (
+    FORECAST_SOURCE_SQL,
+    latest_forecast_identity_sql,
+    latest_forecast_order_by_sql,
+)
 from skycast.logging_utils import configure_logging
 from skycast.migrations import run_migrations
 from skycast.pipeline import (
@@ -127,7 +132,6 @@ METRIC_SQL_MAP = {
     "max_temp": ("fv.max_temp", "wd.max_temp"),
     "precipitation": ("fv.precipitation", "wd.precipitation"),
 }
-FORECAST_SOURCE_SQL = "COALESCE(fr.request_payload->>'source', 'forecast')"
 ROLE_VIEWER = "viewer"
 ROLE_ANALYST = "analyst"
 ROLE_ADMIN = "admin"
@@ -750,28 +754,6 @@ async def _resolve_station_id(
             detail=f"Station with wmo_index={wmo_index} was not found",
         )
     return resolved
-
-
-def _latest_forecast_cte(forecast_expr: str) -> str:
-    return f"""
-        WITH latest_forecast AS (
-            SELECT DISTINCT ON (fv.station_id, fv.forecast_date)
-                fv.station_id,
-                fv.forecast_date,
-                fv.horizon_days,
-                fv.latitude,
-                fv.longitude,
-                fr.provider,
-                fr.model,
-                fr.run_at,
-                {forecast_expr} AS forecast_value
-            FROM forecast_values fv
-            JOIN forecast_runs fr ON fr.id = fv.run_id
-            WHERE fr.status IN ('success', 'partial_failed')
-            ORDER BY fv.station_id, fv.forecast_date, fr.run_at DESC
-        )
-    """
-
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
@@ -1562,13 +1544,7 @@ async def station_series(
         rows = await conn.fetch(
             f"""
             WITH latest_forecast AS (
-                SELECT DISTINCT ON (
-                    fv.forecast_date,
-                    fv.horizon_days,
-                    fr.provider,
-                    fr.model,
-                    {FORECAST_SOURCE_SQL}
-                )
+                SELECT DISTINCT ON ({latest_forecast_identity_sql()})
                     fv.forecast_date,
                     fv.horizon_days,
                     fr.provider,
@@ -1583,13 +1559,7 @@ async def station_series(
                 FROM forecast_values fv
                 JOIN forecast_runs fr ON fr.id = fv.run_id
                 WHERE {' AND '.join(latest_forecast_clauses)}
-                ORDER BY
-                    fv.forecast_date,
-                    fv.horizon_days,
-                    fr.provider,
-                    fr.model,
-                    {FORECAST_SOURCE_SQL},
-                    fr.run_at DESC
+                ORDER BY {latest_forecast_order_by_sql()}
             )
             SELECT
                 wd.observation_date,
