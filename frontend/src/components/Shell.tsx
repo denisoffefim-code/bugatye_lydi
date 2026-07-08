@@ -1,5 +1,4 @@
 import {
-  Activity,
   BarChart3,
   CloudSun,
   GitCompareArrows,
@@ -108,12 +107,11 @@ export function AppShell({
 
       <div className="mainColumn">
         <header className="topbar appTopbar">
-          <button className="iconButton mobileOnly" type="button" onClick={() => setMobileOpen(true)} aria-label="Открыть меню">
-            <Menu size={19} />
-          </button>
-          <div className="topbarSummary">
-            <Activity size={18} />
-            <span>Аналитика факта и прогноза</span>
+          <div className="topbarLead">
+            <button className="iconButton mobileOnly" type="button" onClick={() => setMobileOpen(true)} aria-label="Открыть меню">
+              <Menu size={19} />
+            </button>
+            <span className="topbarTitle desktopOnly">Личный кабинет</span>
           </div>
           <div className="topbarActions">
             <NavLink className="ghostButton desktopOnly" to="/">

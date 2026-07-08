@@ -252,3 +252,21 @@ export function biasSummary(bias: number | null | undefined, metric: Metric) {
     ? `Прогноз чаще завышает показатель «${metricLabels[metric].toLowerCase()}».`
     : `Прогноз чаще занижает показатель «${metricLabels[metric].toLowerCase()}».`;
 }
+
+export function chartNumberDomain(values: Array<number | null | undefined>): [number | "auto", number | "auto"] {
+  const numbers = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!numbers.length) {
+    return ["auto", "auto"];
+  }
+
+  const min = Math.min(...numbers);
+  const max = Math.max(...numbers);
+
+  if (min === max) {
+    const padding = Math.max(Math.abs(min) * 0.12, 1);
+    return [min - padding, max + padding];
+  }
+
+  const padding = Math.max((max - min) * 0.12, 0.5);
+  return [min - padding, max + padding];
+}

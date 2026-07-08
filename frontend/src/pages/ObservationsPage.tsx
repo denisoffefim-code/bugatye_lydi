@@ -136,9 +136,12 @@ export function ObservationsPage() {
           <span>По дату</span>
           <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
         </label>
-        <label className="inputShell">
-          <Search size={17} />
-          <input placeholder="Дата или название" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <label>
+          <span>Поиск</span>
+          <div className="inputShell">
+            <Search size={17} />
+            <input placeholder="Дата или название" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </div>
         </label>
       </div>
 

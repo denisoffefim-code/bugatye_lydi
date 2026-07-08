@@ -8,6 +8,7 @@ import { AccuracyBadge } from "../components/StatusBadge";
 import type { Metric, Station, StationSeriesResponse } from "../types";
 import {
   averageAbsoluteError,
+  chartNumberDomain,
   collapseSeriesRows,
   defaultRange,
   formatDate,
@@ -91,6 +92,7 @@ export function ComparePage() {
     forecast: row.forecast,
     actual: row.actual
   }));
+  const chartDomain = chartNumberDomain(chartData.flatMap((item) => [item.actual, item.forecast]));
 
   function updateFilter<K extends keyof CompareFilters>(key: K, value: CompareFilters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -308,14 +310,14 @@ export function ComparePage() {
             </div>
             {chartData.length ? (
               <ResponsiveContainer width="100%" height={280}>
-                <LineChart data={chartData}>
+                <LineChart data={chartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={18} />
-                  <YAxis />
+                  <YAxis domain={chartDomain} allowDataOverflow={false} />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="forecast" name="Прогноз" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                  <Line type="linear" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />
+                  <Line type="linear" dataKey="forecast" name="Прогноз" stroke="#38bdf8" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             ) : (

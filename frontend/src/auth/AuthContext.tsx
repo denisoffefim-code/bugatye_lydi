@@ -14,6 +14,7 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -26,6 +27,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(authStorage.expiresAt);
     setToken(null);
     setUser(null);
+  }, []);
+
+  const persistSession = useCallback((nextToken: string, expiresAt?: string | null) => {
+    const safeExpiresAt =
+      expiresAt && Number.isFinite(new Date(expiresAt).getTime())
+        ? expiresAt
+        : new Date(Date.now() + DEFAULT_SESSION_TTL_MS).toISOString();
+    localStorage.setItem(authStorage.token, nextToken);
+    localStorage.setItem(authStorage.expiresAt, safeExpiresAt);
   }, []);
 
   const hydrate = useCallback(async () => {
@@ -63,11 +73,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
     const response = await api.login({ email, password });
-    localStorage.setItem(authStorage.token, response.access_token);
-    localStorage.setItem(authStorage.expiresAt, response.expires_at);
+    persistSession(response.access_token, response.expires_at);
     setToken(response.access_token);
     setUser(response.user);
-  }, []);
+  }, [persistSession]);
 
   const register = useCallback(
     async (fullName: string, email: string, password: string) => {

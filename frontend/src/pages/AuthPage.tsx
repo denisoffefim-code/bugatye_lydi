@@ -43,11 +43,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         <div className="authIntro">
           <Logo />
           <h1>{isRegister ? "Создать аккаунт" : "Войти в SkyCast"}</h1>
-          <p>
-            {isRegister
-              ? "Создайте аккаунт, чтобы начать пользоваться сервисом."
-              : "Войдите, чтобы открыть личный кабинет и пользоваться графиками."}
-          </p>
+          {isRegister ? <p>Создайте аккаунт, чтобы начать пользоваться сервисом.</p> : null}
         </div>
 
         <form className="formStack" onSubmit={handleSubmit}>

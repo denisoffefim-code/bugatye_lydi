@@ -90,7 +90,7 @@ class Settings:
     log_json: bool = _get_bool("LOG_JSON", True)
     analytics_cache_enabled: bool = _get_bool("ANALYTICS_CACHE_ENABLED", True)
     analytics_cache_ttl_seconds: int = int(os.getenv("ANALYTICS_CACHE_TTL_SECONDS", "300"))
-    auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
+    auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", "168"))
     auth_password_hash_iterations: int = int(os.getenv("AUTH_PASSWORD_HASH_ITERATIONS", "390000"))
 
     def validate(self) -> None:

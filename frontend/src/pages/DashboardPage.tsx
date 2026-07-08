@@ -1,5 +1,4 @@
 import {
-  ArrowRight,
   BarChart3,
   CalendarClock,
   Database,
@@ -19,7 +18,6 @@ import { MetricCard } from "../components/MetricCard";
 import type { AnalyticsSummaryResponse, ForecastCoverageResponse, Metric, StationsResponse } from "../types";
 import {
   biasSummary,
-  coverageLabel,
   defaultRange,
   formatDate,
   formatDateTime,
@@ -50,6 +48,7 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const range = useMemo(() => defaultRange(30), []);
   const showRole = isPrivilegedRole(user?.role);
+  const canViewAdminCoverage = (user?.role || "").toLowerCase() === "admin";
 
   useEffect(() => {
     let active = true;
@@ -62,7 +61,7 @@ export function DashboardPage() {
           api.summary({ start_date: range.start, end_date: range.end, only_with_coordinates: true }),
           api.stations({ limit: 500 }),
           api.forecastCoverage({ start_date: range.start, end_date: range.end }),
-          showRole ? api.coverage() : Promise.resolve(null)
+          canViewAdminCoverage ? api.coverage() : Promise.resolve(null)
         ]);
 
         if (!active) {
@@ -90,7 +89,7 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [range.end, range.start, showRole]);
+  }, [canViewAdminCoverage, range.end, range.start]);
 
   const coverageItems = data.coverage?.items || [];
   const totalComparedPoints = metricOrder.reduce(
@@ -121,6 +120,23 @@ export function DashboardPage() {
       }))
       .filter((item) => item.max !== null)
       .sort((left, right) => Number(right.max) - Number(left.max))[0] || null;
+  const adminStats = data.adminCoverage
+    ? [
+        { label: "Станций всего", value: formatNumber(data.adminCoverage.stations_total) },
+        { label: "С координатами", value: formatNumber(data.adminCoverage.stations_with_coordinates) },
+        { label: "Запусков прогноза", value: formatNumber(data.adminCoverage.forecast_runs_total) },
+        { label: "Прогнозных значений", value: formatNumber(data.adminCoverage.forecast_values_total) },
+        { label: "Фактических наблюдений", value: formatNumber(data.adminCoverage.weather_rows_total) },
+        {
+          label: "Период факта",
+          value: `${formatDate(String(data.adminCoverage.weather_start_date || ""))} - ${formatDate(String(data.adminCoverage.weather_end_date || ""))}`
+        },
+        {
+          label: "Период прогноза",
+          value: `${formatDate(String(data.adminCoverage.forecast_start_date || ""))} - ${formatDate(String(data.adminCoverage.forecast_end_date || ""))}`
+        }
+      ]
+    : [];
 
   return (
     <section className="pageStack">
@@ -251,71 +267,37 @@ export function DashboardPage() {
             </article>
           </div>
 
-          <div className="dashboardGrid">
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Главное</span>
-                  <h2>Короткие выводы по периоду</h2>
-                </div>
-                <CalendarClock size={20} />
+          <article className="panel">
+            <div className="panelHeader">
+              <div>
+                <span>Главное</span>
+                <h2>Короткие выводы по периоду</h2>
               </div>
-              <div className="detailGrid">
-                <div>
-                  <span>Наиболее рискованная метрика</span>
-                  <strong>{riskiestMetric ? metricLabels[riskiestMetric.metric] : "нет данных"}</strong>
-                </div>
-                <div>
-                  <span>Максимальный промах</span>
-                  <strong>
-                    {riskiestMetric?.max === null || riskiestMetric?.max === undefined
-                      ? "нет данных"
-                      : `${formatNumber(riskiestMetric.max, 1)} ${riskiestMetric.metric === "precipitation" ? "мм" : "°C"}`}
-                  </strong>
-                </div>
-                <div>
-                  <span>Смещение по температуре</span>
-                  <strong>{biasSummary(avgTempMetric?.bias, "avg_temp")}</strong>
-                </div>
-                <div>
-                  <span>Сравнений по температуре</span>
-                  <strong>{formatNumber(avgTempMetric?.compared_points ?? 0)}</strong>
-                </div>
+              <CalendarClock size={20} />
+            </div>
+            <div className="detailGrid">
+              <div>
+                <span>Наиболее рискованная метрика</span>
+                <strong>{riskiestMetric ? metricLabels[riskiestMetric.metric] : "нет данных"}</strong>
               </div>
-            </article>
-
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Наборы прогноза</span>
-                  <h2>Самые наполненные варианты</h2>
-                </div>
-                <ArrowRight size={20} />
+              <div>
+                <span>Максимальный промах</span>
+                <strong>
+                  {riskiestMetric?.max === null || riskiestMetric?.max === undefined
+                    ? "нет данных"
+                    : `${formatNumber(riskiestMetric.max, 1)} ${riskiestMetric.metric === "precipitation" ? "мм" : "°C"}`}
+                </strong>
               </div>
-              {coverageItems.length ? (
-                <div className="coverageList">
-                  {coverageItems.slice(0, 5).map((item) => (
-                    <div className="coverageItem" key={`${item.model}-${item.horizon_days}`}>
-                      <div>
-                        <strong>{item.model}</strong>
-                        <span>
-                          {item.horizon_days} дн. · {formatNumber(item.station_count)} станций
-                        </span>
-                      </div>
-                      <div className="runMeta">
-                        <strong>{formatNumber(item.forecast_rows)}</strong>
-                        <small>
-                          {formatDate(item.forecast_start_date)} - {formatDate(item.forecast_end_date)}
-                        </small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState title="Покрытие пусто" text="Пока нет наборов прогноза, которые можно анализировать." />
-              )}
-            </article>
-          </div>
+              <div>
+                <span>Смещение по температуре</span>
+                <strong>{biasSummary(avgTempMetric?.bias, "avg_temp")}</strong>
+              </div>
+              <div>
+                <span>Сравнений по температуре</span>
+                <strong>{formatNumber(avgTempMetric?.compared_points ?? 0)}</strong>
+              </div>
+            </div>
+          </article>
 
           <div className="quickGrid">
             <Link className="quickTile" to="/app/analytics">
@@ -335,24 +317,22 @@ export function DashboardPage() {
             </Link>
           </div>
 
-          {showRole && data.adminCoverage ? (
+          {canViewAdminCoverage && data.adminCoverage ? (
             <article className="panel compactPanel">
               <div className="panelHeader">
                 <div>
                   <span>Служебно</span>
-                  <h2>Операционная сводка</h2>
+                  <h2>Сводка данных</h2>
                 </div>
                 <ShieldCheck size={20} />
               </div>
               <div className="miniStats">
-                {Object.entries(data.adminCoverage)
-                  .slice(0, 8)
-                  .map(([key, value]) => (
-                    <div key={key}>
-                      <span>{coverageLabel(key)}</span>
-                      <strong>{formatNumber(value)}</strong>
-                    </div>
-                  ))}
+                {adminStats.map((item) => (
+                  <div key={item.label}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
               </div>
             </article>
           ) : null}

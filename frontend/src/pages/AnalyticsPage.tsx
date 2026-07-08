@@ -16,6 +16,7 @@ import type {
 import {
   averageAbsoluteError,
   biasSummary,
+  chartNumberDomain,
   collapseSeriesRows,
   defaultRange,
   formatDate,
@@ -57,6 +58,7 @@ export function AnalyticsPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
@@ -101,6 +103,8 @@ export function AnalyticsPage() {
     forecast: item.forecast,
     actual: item.actual
   }));
+  const errorChartDomain = chartNumberDomain(errorChartData.map((item) => item.error));
+  const seriesChartDomain = chartNumberDomain(seriesChartData.flatMap((item) => [item.actual, item.forecast]));
 
   function updateFilter<K extends keyof AnalysisFilters>(key: K, value: AnalysisFilters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -114,6 +118,7 @@ export function AnalyticsPage() {
 
     setLoading(true);
     setError(null);
+    setWarnings([]);
 
     const baseParams = {
       start_date: query.startDate,
@@ -123,11 +128,13 @@ export function AnalyticsPage() {
     };
 
     try {
-      const [summaryResponse, topResponse, worstResponse, coverageResponse, seriesResponse] = await Promise.all([
+      const primaryResults = await Promise.allSettled([
         api.summary({ ...baseParams, only_with_coordinates: true }),
-        api.topErrors({ ...baseParams, metric: query.metric, limit: 20, only_with_coordinates: true }),
-        api.worstStations({ ...baseParams, metric: query.metric, limit: 12 }),
-        api.forecastCoverage(baseParams),
+        api.forecastCoverage(baseParams)
+      ]);
+      const secondaryResults = await Promise.allSettled([
+        api.topErrors({ ...baseParams, metric: query.metric, limit: 12, only_with_coordinates: true }),
+        api.worstStations({ ...baseParams, metric: query.metric, limit: 10 }),
         query.stationId
           ? api.stationSeries({
               ...baseParams,
@@ -136,11 +143,58 @@ export function AnalyticsPage() {
           : Promise.resolve(null)
       ]);
 
-      setSummary(summaryResponse);
-      setTopErrors(topResponse);
-      setWorstStations(worstResponse);
-      setCoverage(coverageResponse);
-      setSeries(seriesResponse);
+      const nextWarnings: string[] = [];
+      let successCount = 0;
+
+      if (primaryResults[0].status === "fulfilled") {
+        setSummary(primaryResults[0].value);
+        successCount += 1;
+      } else {
+        setSummary(null);
+        nextWarnings.push(`Сводка периода недоступна: ${formatApiError(primaryResults[0].reason)}`);
+      }
+
+      if (primaryResults[1].status === "fulfilled") {
+        setCoverage(primaryResults[1].value);
+        successCount += 1;
+      } else {
+        setCoverage(null);
+        nextWarnings.push(`Покрытие прогноза недоступно: ${formatApiError(primaryResults[1].reason)}`);
+      }
+
+      if (secondaryResults[0].status === "fulfilled") {
+        setTopErrors(secondaryResults[0].value);
+        successCount += 1;
+      } else {
+        setTopErrors(null);
+        nextWarnings.push(`Список крупных ошибок временно недоступен: ${formatApiError(secondaryResults[0].reason)}`);
+      }
+
+      if (secondaryResults[1].status === "fulfilled") {
+        setWorstStations(secondaryResults[1].value);
+        successCount += 1;
+      } else {
+        setWorstStations(null);
+        nextWarnings.push(`Рейтинг станций временно недоступен: ${formatApiError(secondaryResults[1].reason)}`);
+      }
+
+      if (secondaryResults[2].status === "fulfilled") {
+        setSeries(secondaryResults[2].value);
+        if (query.stationId) {
+          successCount += 1;
+        }
+      } else {
+        setSeries(null);
+        nextWarnings.push(`График по станции временно недоступен: ${formatApiError(secondaryResults[2].reason)}`);
+      }
+
+      if (!successCount) {
+        setError(nextWarnings[0] || "Не удалось загрузить аналитику.");
+        setWarnings([]);
+        return;
+      }
+
+      setWarnings(nextWarnings);
       setActiveFilters(query);
       setHasLoaded(true);
     } catch (err) {
@@ -159,6 +213,7 @@ export function AnalyticsPage() {
     setCoverage(null);
     setSeries(null);
     setError(null);
+    setWarnings([]);
     setHasLoaded(false);
   }
 
@@ -248,6 +303,7 @@ export function AnalyticsPage() {
 
       {loading ? <SkeletonGrid cards={4} /> : null}
       {error ? <ErrorState text={error} /> : null}
+      {!loading && !error && warnings.length ? <div className="noticeLine">{warnings.join(" ")}</div> : null}
 
       {!loading && !error && !hasLoaded ? (
         <EmptyState title="Анализ еще не запущен" text="Выберите параметры выше и нажмите «Показать анализ»." />
@@ -351,12 +407,12 @@ export function AnalyticsPage() {
               </div>
               {errorChartData.length ? (
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={errorChartData}>
+                  <BarChart data={errorChartData} margin={{ top: 12, right: 16, bottom: 12, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-12} textAnchor="end" height={70} />
-                    <YAxis />
+                    <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-12} textAnchor="end" height={70} tickMargin={10} />
+                    <YAxis domain={errorChartDomain} />
                     <Tooltip />
-                    <Bar dataKey="error" name="Абсолютная ошибка" fill="#38bdf8" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="error" name="Абсолютная ошибка" fill="#38bdf8" radius={[4, 4, 0, 0]} maxBarSize={38} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
@@ -387,14 +443,14 @@ export function AnalyticsPage() {
                     </div>
                   </div>
                   <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={seriesChartData}>
+                    <LineChart data={seriesChartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={18} />
-                      <YAxis />
+                      <YAxis domain={seriesChartDomain} allowDataOverflow={false} />
                       <Tooltip />
                       <Legend />
-                      <Line type="monotone" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="forecast" name="Прогноз" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                      <Line type="linear" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />
+                      <Line type="linear" dataKey="forecast" name="Прогноз" stroke="#38bdf8" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </>

@@ -821,6 +821,18 @@ select:focus {
   min-width: 0;
 }
 
+.topbarLead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbarTitle {
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .appTopbar {
   position: sticky;
   top: 0;
@@ -1031,11 +1043,16 @@ select:focus {
 .filterPanel {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  align-items: end;
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.filterPanel > * {
+  min-width: 0;
 }
 
 .mainFilters {
@@ -1050,6 +1067,7 @@ select:focus {
 .filterToggle {
   align-self: end;
   min-height: 42px;
+  margin-top: 20px;
 }
 
 .formActions {
@@ -1057,6 +1075,8 @@ select:focus {
   align-self: end;
   gap: 12px;
   flex-wrap: wrap;
+  min-height: 42px;
+  margin-top: 20px;
 }
 
 .inlineFilters,
@@ -1500,5 +1520,9 @@ tr:hover td {
 
   .topbarSummary {
     min-width: 0;
+  }
+
+  .formActions {
+    width: 100%;
   }
 }

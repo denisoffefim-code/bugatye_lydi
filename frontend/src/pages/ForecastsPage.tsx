@@ -154,30 +154,33 @@ export function ForecastsPage() {
 
       {showAdvanced ? (
         <div className="filterPanel advancedPanel">
-          <label className="inputShell">
-            <Search size={17} />
-            <input placeholder="Название, номер или состояние" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <label>
+            <span>Поиск</span>
+            <div className="inputShell">
+              <Search size={17} />
+              <input placeholder="Название, номер или состояние" value={search} onChange={(event) => setSearch(event.target.value)} />
+            </div>
           </label>
-        <label>
-          <span>Состояние</span>
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">Все</option>
-            {statuses.map((item) => (
-              <option key={item} value={item}>
-                {statusLabel(item)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Сортировка</span>
-          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SortKey)}>
-            <option value="run_at">Дата запуска</option>
-            <option value="saved_rows">Записи</option>
-            <option value="requested_station_count">Станции</option>
-            <option value="status">Состояние</option>
-          </select>
-        </label>
+          <label>
+            <span>Состояние</span>
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="">Все</option>
+              {statuses.map((item) => (
+                <option key={item} value={item}>
+                  {statusLabel(item)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Сортировка</span>
+            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SortKey)}>
+              <option value="run_at">Дата запуска</option>
+              <option value="saved_rows">Записи</option>
+              <option value="requested_station_count">Станции</option>
+              <option value="status">Состояние</option>
+            </select>
+          </label>
         </div>
       ) : null}
 
