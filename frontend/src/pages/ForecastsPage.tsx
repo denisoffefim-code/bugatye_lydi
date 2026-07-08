@@ -4,7 +4,7 @@ import { api, formatApiError } from "../api/client";
 import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../components/DataState";
 import { Modal } from "../components/Modal";
 import { StatusBadge } from "../components/StatusBadge";
-import type { ForecastRun, ForecastRunsResponse, Source, Station, StationSeriesResponse } from "../types";
+import type { ForecastRun, ForecastRunsResponse, Station, StationSeriesResponse } from "../types";
 import { defaultRange, formatDate, formatDateTime, formatNumber, sourceLabel, statusLabel } from "../utils";
 
 type SortKey = "run_at" | "saved_rows" | "requested_station_count" | "status";
@@ -20,7 +20,6 @@ export function ForecastsPage() {
   const [endDate, setEndDate] = useState(range.end);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [source, setSource] = useState<Source | "">("");
   const [sortBy, setSortBy] = useState<SortKey>("run_at");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -72,8 +71,7 @@ export function ForecastsPage() {
         const response = await api.stationSeries({
           station_id: Number(selectedStation),
           start_date: startDate,
-          end_date: endDate,
-          source: source || undefined
+          end_date: endDate
         });
         if (active) {
           setSeries(response);
@@ -92,7 +90,7 @@ export function ForecastsPage() {
     return () => {
       active = false;
     };
-  }, [endDate, selectedStation, source, startDate]);
+  }, [endDate, selectedStation, startDate]);
 
   const filteredRuns = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -101,9 +99,8 @@ export function ForecastsPage() {
         const text = `${run.id} ${run.provider} ${run.model} ${run.source} ${run.status}`.toLowerCase();
         const matchesSearch = !query || text.includes(query);
         const matchesStatus = !status || run.status === status;
-        const matchesSource = !source || run.source === source;
         const matchesDate = run.requested_end_date >= startDate && run.requested_start_date <= endDate;
-        return matchesSearch && matchesStatus && matchesSource && matchesDate;
+        return matchesSearch && matchesStatus && matchesDate;
       })
       .sort((a, b) => {
         if (sortBy === "run_at") {
@@ -114,7 +111,7 @@ export function ForecastsPage() {
         }
         return Number(b[sortBy]) - Number(a[sortBy]);
       });
-  }, [endDate, runs?.runs, search, sortBy, source, startDate, status]);
+  }, [endDate, runs?.runs, search, sortBy, startDate, status]);
 
   const statuses = useMemo(() => Array.from(new Set((runs?.runs || []).map((run) => run.status))).sort(), [runs?.runs]);
   const forecastRows = (series?.items || []).filter((item) => item.forecast_avg_temp !== null || item.forecast_precipitation !== null);
@@ -161,14 +158,6 @@ export function ForecastsPage() {
             <Search size={17} />
             <input placeholder="Название, номер или состояние" value={search} onChange={(event) => setSearch(event.target.value)} />
           </label>
-        <label>
-          <span>Тип данных</span>
-          <select value={source} onChange={(event) => setSource(event.target.value as Source | "")}>
-            <option value="">Все</option>
-            <option value="forecast">Новые прогнозы</option>
-            <option value="previous_runs">Прошлые прогнозы</option>
-          </select>
-        </label>
         <label>
           <span>Состояние</span>
           <select value={status} onChange={(event) => setStatus(event.target.value)}>

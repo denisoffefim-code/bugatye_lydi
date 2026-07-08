@@ -1,4 +1,4 @@
-import type { Metric, Source } from "./types";
+import type { Metric, Source, StationSeriesItem } from "./types";
 
 export const metricLabels: Record<Metric, string> = {
   avg_temp: "Средняя температура",
@@ -16,9 +16,9 @@ export const metricUnits: Record<Metric, string> = {
 
 export function sourceLabel(source: Source | null | undefined) {
   if (!source) {
-    return "любой источник";
+    return "все прогнозы";
   }
-  return source === "previous_runs" ? "прошлые прогнозы" : "новые прогнозы";
+  return "прогноз";
 }
 
 export function statusLabel(status: string | null | undefined) {
@@ -50,6 +50,11 @@ export function roleLabel(role: string | null | undefined) {
     return "работает с анализом";
   }
   return "пользователь";
+}
+
+export function isPrivilegedRole(role: string | null | undefined) {
+  const normalized = (role || "").toLowerCase();
+  return normalized === "admin" || normalized === "analyst";
 }
 
 export function coverageLabel(key: string) {
@@ -132,4 +137,118 @@ export function signed(value: number | null | undefined, unit = "") {
 export function isRoleAtLeast(role: string | undefined, target: "viewer" | "analyst" | "admin") {
   const ranks: Record<string, number> = { viewer: 1, user: 1, analyst: 2, admin: 3 };
   return (ranks[(role || "viewer").toLowerCase()] || 0) >= ranks[target];
+}
+
+export interface MetricSeriesPoint {
+  date: string;
+  actual: number | null;
+  forecast: number | null;
+  error: number | null;
+  model: string | null;
+  horizonDays: number | null;
+  runAt: string | null;
+  source: Source | null;
+}
+
+const metricSeriesMap: Record<
+  Metric,
+  {
+    actual: keyof StationSeriesItem;
+    forecast: keyof StationSeriesItem;
+    error: keyof StationSeriesItem;
+  }
+> = {
+  avg_temp: {
+    actual: "actual_avg_temp",
+    forecast: "forecast_avg_temp",
+    error: "error_avg_temp"
+  },
+  min_temp: {
+    actual: "actual_min_temp",
+    forecast: "forecast_min_temp",
+    error: "error_min_temp"
+  },
+  max_temp: {
+    actual: "actual_max_temp",
+    forecast: "forecast_max_temp",
+    error: "error_max_temp"
+  },
+  precipitation: {
+    actual: "actual_precipitation",
+    forecast: "forecast_precipitation",
+    error: "error_precipitation"
+  }
+};
+
+export function collapseSeriesRows(items: StationSeriesItem[], metric: Metric): MetricSeriesPoint[] {
+  const fields = metricSeriesMap[metric];
+  const rows: MetricSeriesPoint[] = [];
+  const seenDates = new Set<string>();
+
+  for (const item of items) {
+    const actual = item[fields.actual] as number | null;
+    const forecast = item[fields.forecast] as number | null;
+    const error = item[fields.error] as number | null;
+
+    if (actual === null && forecast === null) {
+      continue;
+    }
+    if (seenDates.has(item.observation_date)) {
+      continue;
+    }
+
+    seenDates.add(item.observation_date);
+    rows.push({
+      date: item.observation_date,
+      actual,
+      forecast,
+      error,
+      model: item.model,
+      horizonDays: item.horizon_days,
+      runAt: item.run_at,
+      source: item.source
+    });
+  }
+
+  return rows;
+}
+
+export function averageAbsoluteError(points: MetricSeriesPoint[]) {
+  const values = points
+    .map((point) => point.error)
+    .filter((value): value is number => value !== null && value !== undefined && !Number.isNaN(value))
+    .map((value) => Math.abs(value));
+
+  if (!values.length) {
+    return null;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function maxAbsoluteErrorPoint(points: MetricSeriesPoint[]) {
+  const withErrors = points.filter((point) => point.error !== null && point.error !== undefined && !Number.isNaN(point.error));
+  if (!withErrors.length) {
+    return null;
+  }
+  return withErrors.reduce((current, point) =>
+    Math.abs(Number(point.error)) > Math.abs(Number(current.error)) ? point : current
+  );
+}
+
+export function biasSummary(bias: number | null | undefined, metric: Metric) {
+  if (bias === null || bias === undefined || Number.isNaN(bias)) {
+    return "Системное смещение пока не определяется.";
+  }
+
+  const absolute = Math.abs(bias);
+  const quietThreshold = metric === "precipitation" ? 0.5 : 0.3;
+
+  if (absolute <= quietThreshold) {
+    return "Системное смещение почти не заметно.";
+  }
+
+  return bias > 0
+    ? `Прогноз чаще завышает показатель «${metricLabels[metric].toLowerCase()}».`
+    : `Прогноз чаще занижает показатель «${metricLabels[metric].toLowerCase()}».`;
 }

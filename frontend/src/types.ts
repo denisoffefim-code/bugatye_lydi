@@ -1,5 +1,5 @@
 export type Role = "viewer" | "analyst" | "admin" | string;
-export type Source = "forecast" | "previous_runs";
+export type Source = "forecast";
 export type Metric = "avg_temp" | "min_temp" | "max_temp" | "precipitation";
 
 export interface User {

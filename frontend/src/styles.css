@@ -275,10 +275,10 @@ button:disabled {
 
 .heroContent {
   display: grid;
-  grid-template-columns: minmax(0, 1.04fr) minmax(320px, 0.78fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: clamp(28px, 5vw, 80px);
-  max-width: 1440px;
+  max-width: 960px;
   margin: 0 auto;
 }
 
@@ -1050,6 +1050,13 @@ select:focus {
 .filterToggle {
   align-self: end;
   min-height: 42px;
+}
+
+.formActions {
+  display: flex;
+  align-self: end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .inlineFilters,

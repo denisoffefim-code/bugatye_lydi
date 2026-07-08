@@ -8,7 +8,7 @@ Frontend находится в `skycast/bugatye_lydi/frontend` и работае
 
 ```bash
 cd ..
-uvicorn skycast.main:app --host 0.0.0.0 --port 8080
+uvicorn skycast.main:app --host 127.0.0.1 --port 8080
 ```
 
 2. Установите зависимости frontend:
@@ -23,7 +23,7 @@ npm install
 npm run dev
 ```
 
-По умолчанию Vite проксирует `/api` и `/health` на `http://localhost:8080`. Это можно изменить через `VITE_API_PROXY_TARGET` в `.env`.
+По умолчанию Vite проксирует `/api` и `/health` на `http://127.0.0.1:8080`. Это можно изменить через `VITE_API_PROXY_TARGET` в `.env`.
 
 ## Используемые API
 

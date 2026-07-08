@@ -1,4 +1,4 @@
-import { Activity, ArrowRight, BarChart3, CheckCircle2, CloudSun, Gauge, MapPin, PlayCircle, ShieldCheck, TrendingUp } from "lucide-react";
+import { ArrowRight, BarChart3, CheckCircle2, CloudSun, Gauge, MapPin, PlayCircle, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const features = [
@@ -56,47 +56,6 @@ export function LandingPage() {
               </span>
             </div>
           </div>
-
-          <aside className="weatherGlass" aria-label="Пример аналитической карточки">
-            <div className="glassHeader">
-              <div>
-                <span>Москва</span>
-                <strong>Точность прогноза</strong>
-              </div>
-              <div className="glassIcon">
-                <TrendingUp size={19} />
-              </div>
-            </div>
-            <div className="glassMetricRow">
-              <div className="matchRing" aria-label="Совпадение 92 процента">
-                <strong>92%</strong>
-                <span>совпадение</span>
-              </div>
-              <div className="glassFacts">
-                <div>
-                  <CloudSun size={18} />
-                  <span>Прогноз</span>
-                  <strong>18 °C</strong>
-                </div>
-                <div>
-                  <MapPin size={18} />
-                  <span>Факт</span>
-                  <strong>17 °C</strong>
-                </div>
-              </div>
-            </div>
-            <div className="glassChart" aria-hidden="true">
-              {[42, 68, 56, 82, 74, 90, 78].map((height, index) => (
-                <span key={index} style={{ height: `${height}%` }} />
-              ))}
-            </div>
-            <div className="glassFooter">
-              <span>
-                <Activity size={16} /> Средняя разница
-              </span>
-              <strong>1°C</strong>
-            </div>
-          </aside>
         </div>
       </section>
 

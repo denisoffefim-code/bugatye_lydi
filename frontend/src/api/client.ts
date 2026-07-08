@@ -41,7 +41,7 @@ function buildUrl(path: string, params?: QueryParams) {
       url.searchParams.set(key, String(value));
     }
   });
-  return `${url.pathname}${url.search}`;
+  return url.toString();
 }
 
 async function request<T>(path: string, options: RequestInit = {}, params?: QueryParams): Promise<T> {
@@ -68,12 +68,20 @@ async function request<T>(path: string, options: RequestInit = {}, params?: Quer
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
 
   if (!response.ok) {
+    const detail =
+      typeof payload === "object" && payload
+        ? payload.detail
+        : typeof payload === "string" && payload.trim()
+          ? payload
+          : response.status >= 500
+            ? "Сервис недоступен. Проверьте, что backend запущен, и повторите попытку."
+            : `Не удалось получить ответ сервиса. Код: ${response.status}`;
     if (response.status === 401) {
       localStorage.removeItem(authStorage.token);
       localStorage.removeItem(authStorage.expiresAt);
       window.dispatchEvent(new CustomEvent("skycast:unauthorized"));
     }
-    throw new ApiError(response.status, typeof payload === "object" && payload ? payload.detail : payload);
+    throw new ApiError(response.status, detail);
   }
 
   return payload as T;
@@ -201,6 +209,9 @@ function humanError(detail: unknown) {
   }
   if (normalized.includes("failed to fetch")) {
     return "Не удалось связаться с сервисом. Проверьте подключение и попробуйте снова.";
+  }
+  if (normalized.includes("econnrefused") || normalized.includes("socket hang up") || normalized.includes("backend")) {
+    return "Сервис недоступен. Проверьте, что backend запущен, и повторите попытку.";
   }
   return text || "Не удалось выполнить запрос.";
 }

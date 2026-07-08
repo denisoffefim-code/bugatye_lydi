@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   CloudSun,
   GitCompareArrows,
@@ -14,15 +15,15 @@ import {
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { roleLabel } from "../utils";
+import { isPrivilegedRole, roleLabel } from "../utils";
 import { Logo } from "./Logo";
 
 const navItems = [
-  { to: "/app", label: "Главная", icon: LayoutDashboard, end: true },
+  { to: "/app", label: "Кабинет", icon: LayoutDashboard, end: true },
   { to: "/app/forecasts", label: "Прогнозы", icon: CloudSun },
-  { to: "/app/observations", label: "Фактическая погода", icon: ThermometerSun },
-  { to: "/app/compare", label: "Сравнение", icon: GitCompareArrows },
-  { to: "/app/analytics", label: "Графики", icon: BarChart3 }
+  { to: "/app/observations", label: "Фактические данные", icon: ThermometerSun },
+  { to: "/app/compare", label: "Разбор станции", icon: GitCompareArrows },
+  { to: "/app/analytics", label: "Аналитика", icon: BarChart3 }
 ];
 
 export function PublicShell({
@@ -69,6 +70,7 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const showRole = isPrivilegedRole(user?.role);
 
   async function handleLogout() {
     await logout();
@@ -95,7 +97,7 @@ export function AppShell({
         <div className="sidebarFooter">
           <div className="userMini">
             <strong>{user?.full_name || "Пользователь"}</strong>
-            <span>{roleLabel(user?.role)}</span>
+            <span>{showRole ? roleLabel(user?.role) : user?.email || "Личный кабинет"}</span>
           </div>
           <button className="ghostButton fullWidth" type="button" onClick={handleLogout}>
             <LogOut size={17} />
@@ -110,8 +112,8 @@ export function AppShell({
             <Menu size={19} />
           </button>
           <div className="topbarSummary">
-            <CloudSun size={18} />
-            <span>Погода и прогнозы</span>
+            <Activity size={18} />
+            <span>Аналитика факта и прогноза</span>
           </div>
           <div className="topbarActions">
             <NavLink className="ghostButton desktopOnly" to="/">
