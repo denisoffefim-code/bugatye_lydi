@@ -4,7 +4,7 @@ metadata:
   name: forecast-service
   namespace: skycast
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: forecast-service
@@ -13,9 +13,11 @@ spec:
       labels:
         app.kubernetes.io/name: forecast-service
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: forecast-service
-          image: cr.yandex/replace-me/skycast:replace-me
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02
           imagePullPolicy: IfNotPresent
           env:
             - name: APP_MODULE
@@ -45,6 +47,8 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
             readOnlyRootFilesystem: true
           resources:
             requests:
@@ -74,34 +78,3 @@ spec:
     - name: http
       port: 80
       targetPort: http
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: forecast-service
-  namespace: skycast
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: forecast-service
-  minReplicas: 2
-  maxReplicas: 5
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: forecast-service
-  namespace: skycast
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: forecast-service

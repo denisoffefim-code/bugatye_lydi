@@ -12,9 +12,11 @@ spec:
         app.kubernetes.io/name: skycast-migrations
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        fsGroup: 999
       containers:
         - name: migrations
-          image: cr.yandex/replace-me/skycast:replace-me
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "skycast.migrate"]
           envFrom:
@@ -36,6 +38,8 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
             readOnlyRootFilesystem: true
       volumes:
         - name: yandex-ca

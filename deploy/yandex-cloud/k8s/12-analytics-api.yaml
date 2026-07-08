@@ -4,7 +4,7 @@ metadata:
   name: analytics-api
   namespace: skycast
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: analytics-api
@@ -13,9 +13,11 @@ spec:
       labels:
         app.kubernetes.io/name: analytics-api
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: analytics-api
-          image: cr.yandex/replace-me/skycast:replace-me
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02
           imagePullPolicy: IfNotPresent
           env:
             - name: APP_MODULE
@@ -45,6 +47,8 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
             readOnlyRootFilesystem: true
           resources:
             requests:
@@ -68,40 +72,10 @@ metadata:
   name: analytics-api
   namespace: skycast
 spec:
+  type: LoadBalancer
   selector:
     app.kubernetes.io/name: analytics-api
   ports:
     - name: http
       port: 80
       targetPort: http
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: analytics-api
-  namespace: skycast
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: analytics-api
-  minReplicas: 2
-  maxReplicas: 5
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: analytics-api
-  namespace: skycast
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: analytics-api

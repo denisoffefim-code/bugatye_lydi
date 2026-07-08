@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import ssl
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,13 +98,26 @@ def serialize_outbox_message(message: OutboxMessage) -> dict[str, Any]:
     }
 
 
+def normalize_outbox_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        decoded = json.loads(payload)
+        if not isinstance(decoded, dict):
+            raise ValueError("Outbox payload JSON must decode to an object")
+        return decoded
+    raise TypeError(f"Unsupported outbox payload type: {type(payload).__name__}")
+
+
 def deserialize_outbox_message(payload: dict[str, Any]) -> OutboxMessage:
     return OutboxMessage(
         id=int(payload["id"]),
         topic=str(payload["topic"]),
         message_key=str(payload["message_key"]),
         aggregate_key=str(payload["aggregate_key"]),
-        payload=dict(payload["payload"]),
+        payload=normalize_outbox_payload(payload["payload"]),
         attempts=int(payload["attempts"]),
         created_at=datetime.fromisoformat(str(payload["created_at"])),
     )
@@ -235,7 +249,7 @@ async def claim_outbox_batch(conn: asyncpg.Connection, batch_size: int) -> list[
             topic=row["topic"],
             message_key=row["message_key"],
             aggregate_key=row["aggregate_key"],
-            payload=dict(row["payload"]),
+            payload=normalize_outbox_payload(row["payload"]),
             attempts=row["attempts"],
             created_at=row["created_at"],
         )

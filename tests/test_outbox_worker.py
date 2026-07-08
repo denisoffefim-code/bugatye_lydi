@@ -15,6 +15,7 @@ from skycast.outbox_worker import (
     compute_retry_delay_seconds,
     deserialize_outbox_message,
     kafka_topic_name,
+    normalize_outbox_payload,
     redis_stream_name,
     serialize_outbox_message,
 )
@@ -79,6 +80,29 @@ class OutboxWorkerHelpersTests(unittest.TestCase):
 
     def test_message_serialization_roundtrip_is_stable(self) -> None:
         restored = deserialize_outbox_message(serialize_outbox_message(self.message))
+
+        self.assertEqual(restored, self.message)
+
+    def test_normalize_outbox_payload_accepts_json_string(self) -> None:
+        payload = normalize_outbox_payload('{\"forecast_date\":\"2026-07-10\",\"avg_temp\":17.4}')
+
+        self.assertEqual(
+            payload,
+            {"forecast_date": "2026-07-10", "avg_temp": 17.4},
+        )
+
+    def test_deserialize_outbox_message_accepts_json_string_payload(self) -> None:
+        restored = deserialize_outbox_message(
+            {
+                "id": 10,
+                "topic": "forecast.accepted",
+                "message_key": "forecast.accepted:forecast:7:42:2026-07-10",
+                "aggregate_key": "7",
+                "payload": '{\"forecast_date\":\"2026-07-10\",\"avg_temp\":17.4}',
+                "attempts": 2,
+                "created_at": "2026-07-08T12:30:00+00:00",
+            }
+        )
 
         self.assertEqual(restored, self.message)
 

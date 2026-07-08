@@ -15,7 +15,7 @@ metadata:
   namespace: skycast
 spec:
   serviceName: outbox-worker
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: outbox-worker
@@ -24,9 +24,11 @@ spec:
       labels:
         app.kubernetes.io/name: outbox-worker
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: outbox-worker
-          image: cr.yandex/replace-me/skycast:replace-me
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-02
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "skycast.outbox_worker"]
           envFrom:
@@ -37,6 +39,8 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
             readOnlyRootFilesystem: true
           resources:
             requests:
@@ -64,34 +68,3 @@ spec:
         resources:
           requests:
             storage: 5Gi
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: outbox-worker
-  namespace: skycast
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: StatefulSet
-    name: outbox-worker
-  minReplicas: 2
-  maxReplicas: 4
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: outbox-worker
-  namespace: skycast
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: outbox-worker
