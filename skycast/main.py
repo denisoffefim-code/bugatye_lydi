@@ -1366,6 +1366,30 @@ async def top_errors(
     )
 
     query = f"""
+        WITH station_top_errors AS (
+            SELECT DISTINCT ON (station_id)
+                station_id,
+                wmo_index,
+                name,
+                country,
+                latitude,
+                longitude,
+                forecast_date,
+                horizon_days,
+                provider,
+                model,
+                source,
+                run_at,
+                forecast_value,
+                actual_value,
+                signed_error,
+                absolute_error,
+                error_rank
+            FROM dm_forecast_errors
+            WHERE {' AND '.join(clauses)}
+              {coordinates_filter}
+            ORDER BY station_id, absolute_error DESC, forecast_date DESC, horizon_days ASC
+        )
         SELECT
             station_id,
             wmo_index,
@@ -1384,9 +1408,7 @@ async def top_errors(
             signed_error,
             absolute_error,
             error_rank
-        FROM dm_forecast_errors
-        WHERE {' AND '.join(clauses)}
-          {coordinates_filter}
+        FROM station_top_errors
         ORDER BY absolute_error DESC, forecast_date DESC, horizon_days ASC
         LIMIT ${len(args) + 1}
     """

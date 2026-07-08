@@ -162,6 +162,50 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("source =", query)
         self.assertEqual(args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), 20))
 
+    async def test_top_errors_returns_unique_stations(self) -> None:
+        conn = _RecordingConnection(
+            fetch_results=[
+                [
+                    {
+                        "station_id": 1,
+                        "wmo_index": "24944",
+                        "name": "Vitim",
+                        "country": "RU",
+                        "latitude": 59.45,
+                        "longitude": 112.57,
+                        "forecast_date": date(2026, 7, 10),
+                        "horizon_days": 5,
+                        "provider": "open-meteo",
+                        "model": "best_match",
+                        "source": "forecast",
+                        "run_at": None,
+                        "forecast_value": -16.4,
+                        "actual_value": -41.8,
+                        "signed_error": 25.4,
+                        "absolute_error": 25.4,
+                        "error_rank": 1,
+                    }
+                ]
+            ]
+        )
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await top_errors(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 10),
+                metric="avg_temp",
+                limit=20,
+                horizon_days=None,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        self.assertEqual(response["items"][0]["station_id"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertIn("WITH station_top_errors AS", query)
+        self.assertIn("SELECT DISTINCT ON (station_id)", query)
+        self.assertIn("ORDER BY station_id, absolute_error DESC, forecast_date DESC, horizon_days ASC", query)
+        self.assertEqual(args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), 20))
+
     async def test_analytics_summary_ignores_blank_model_filter(self) -> None:
         conn = _RecordingConnection(
             fetchrow_results=[
