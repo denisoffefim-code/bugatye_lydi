@@ -1,11 +1,11 @@
-import { CalendarDays, CloudSun, Eye, Filter, Search, SlidersHorizontal } from "lucide-react";
+import { CloudSun, Eye, Filter, Search, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../api/client";
 import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../components/DataState";
 import { Modal } from "../components/Modal";
 import { StatusBadge } from "../components/StatusBadge";
 import type { ForecastRun, ForecastRunsResponse, Source, Station, StationSeriesResponse } from "../types";
-import { defaultRange, formatDate, formatDateTime, formatNumber, sourceLabel } from "../utils";
+import { defaultRange, formatDate, formatDateTime, formatNumber, sourceLabel, statusLabel } from "../utils";
 
 type SortKey = "run_at" | "saved_rows" | "requested_station_count" | "status";
 
@@ -22,6 +22,7 @@ export function ForecastsPage() {
   const [status, setStatus] = useState("");
   const [source, setSource] = useState<Source | "">("");
   const [sortBy, setSortBy] = useState<SortKey>("run_at");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,15 +124,22 @@ export function ForecastsPage() {
       <div className="pageHeader">
         <div>
           <span>Прогнозы</span>
-          <h1>Запуски и прогнозные значения</h1>
-          <p>Фильтруйте запуски, смотрите детали и прогнозные значения по выбранной станции.</p>
+          <h1>Прогнозы по городам</h1>
+          <p>Выберите город и период, чтобы посмотреть сохраненные прогнозы.</p>
         </div>
       </div>
 
-      <div className="filterPanel">
-        <label className="inputShell">
-          <Search size={17} />
-          <input placeholder="Поиск по модели, статусу, id" value={search} onChange={(event) => setSearch(event.target.value)} />
+      <div className="filterPanel mainFilters">
+        <label>
+          <span>Город</span>
+          <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
+            <option value="">Не выбран</option>
+            {stations.map((station) => (
+              <option key={station.id} value={station.id}>
+                {station.name} · {station.wmo_index}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           <span>С даты</span>
@@ -141,21 +149,33 @@ export function ForecastsPage() {
           <span>По дату</span>
           <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
         </label>
+        <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+          <SlidersHorizontal size={17} />
+          Дополнительные параметры
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <div className="filterPanel advancedPanel">
+          <label className="inputShell">
+            <Search size={17} />
+            <input placeholder="Название, номер или состояние" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
         <label>
-          <span>Источник</span>
+          <span>Тип данных</span>
           <select value={source} onChange={(event) => setSource(event.target.value as Source | "")}>
             <option value="">Все</option>
-            <option value="forecast">forecast</option>
-            <option value="previous_runs">historical</option>
+            <option value="forecast">Новые прогнозы</option>
+            <option value="previous_runs">Прошлые прогнозы</option>
           </select>
         </label>
         <label>
-          <span>Статус</span>
+          <span>Состояние</span>
           <select value={status} onChange={(event) => setStatus(event.target.value)}>
             <option value="">Все</option>
             {statuses.map((item) => (
               <option key={item} value={item}>
-                {item}
+                {statusLabel(item)}
               </option>
             ))}
           </select>
@@ -164,12 +184,13 @@ export function ForecastsPage() {
           <span>Сортировка</span>
           <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SortKey)}>
             <option value="run_at">Дата запуска</option>
-            <option value="saved_rows">Строки</option>
+            <option value="saved_rows">Записи</option>
             <option value="requested_station_count">Станции</option>
-            <option value="status">Статус</option>
+            <option value="status">Состояние</option>
           </select>
         </label>
-      </div>
+        </div>
+      ) : null}
 
       {loading ? <SkeletonGrid cards={3} /> : null}
       {error ? <ErrorState text={error} /> : null}
@@ -183,14 +204,14 @@ export function ForecastsPage() {
                   <CloudSun size={22} />
                   <StatusBadge status={run.status} />
                 </div>
-                <h2>Run #{run.id}</h2>
+                <h2>Проверка #{run.id}</h2>
                 <p>
                   {run.model} · {sourceLabel(run.source)} · {formatDateTime(run.run_at)}
                 </p>
                 <div className="forecastStats">
                   <span>
                     <strong>{formatNumber(run.saved_rows)}</strong>
-                    строк
+                    записей
                   </span>
                   <span>
                     <strong>{formatNumber(run.saved_stations)}</strong>
@@ -198,7 +219,7 @@ export function ForecastsPage() {
                   </span>
                   <span>
                     <strong>{run.saved_horizon_days?.join(", ") || "нет"}</strong>
-                    horizon
+                    дней
                   </span>
                 </div>
                 <button className="ghostButton fullWidth" type="button" onClick={() => setSelectedRun(run)}>
@@ -209,13 +230,13 @@ export function ForecastsPage() {
             ))}
           </div>
 
-          {!filteredRuns.length ? <EmptyState title="Прогнозы не найдены" text="Измените фильтры или проверьте данные backend." /> : null}
+          {!filteredRuns.length ? <EmptyState title="Прогнозы не найдены" text="Измените выбранные даты или параметры." /> : null}
 
           <article className="panel">
             <div className="panelHeader">
               <div>
-                <span>Таблица</span>
-                <h2>Запуски прогнозов</h2>
+                  <span>Список</span>
+                  <h2>Проверки прогнозов</h2>
               </div>
               <Filter size={20} />
             </div>
@@ -223,12 +244,12 @@ export function ForecastsPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Модель</th>
-                    <th>Источник</th>
+                    <th>Номер</th>
+                    <th>Вариант прогноза</th>
+                    <th>Тип данных</th>
                     <th>Период</th>
-                    <th>Статус</th>
-                    <th>Строки</th>
+                    <th>Состояние</th>
+                    <th>Записей</th>
                     <th>Детали</th>
                   </tr>
                 </thead>
@@ -260,23 +281,10 @@ export function ForecastsPage() {
           <article className="panel">
             <div className="panelHeader">
               <div>
-                <span>По станции</span>
-                <h2>Прогнозные значения</h2>
+                <span>По городу</span>
+                <h2>Значения прогноза</h2>
               </div>
               <SlidersHorizontal size={20} />
-            </div>
-            <div className="inlineFilters">
-              <label>
-                <span>Станция</span>
-                <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
-                  <option value="">Не выбрана</option>
-                  {stations.map((station) => (
-                    <option key={station.id} value={station.id}>
-                      {station.name} · {station.wmo_index}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
 
             {seriesLoading ? <LoadingPanel /> : null}
@@ -287,9 +295,9 @@ export function ForecastsPage() {
                   <thead>
                     <tr>
                       <th>Дата</th>
-                      <th>Модель</th>
-                      <th>Источник</th>
-                      <th>Horizon</th>
+                      <th>Вариант прогноза</th>
+                      <th>Тип данных</th>
+                      <th>Дней вперед</th>
                       <th>Температура</th>
                       <th>Мин.</th>
                       <th>Макс.</th>
@@ -322,39 +330,39 @@ export function ForecastsPage() {
         </>
       ) : null}
 
-      <Modal title={selectedRun ? `Forecast run #${selectedRun.id}` : "Forecast run"} open={Boolean(selectedRun)} onClose={() => setSelectedRun(null)}>
+      <Modal title={selectedRun ? `Проверка #${selectedRun.id}` : "Проверка прогноза"} open={Boolean(selectedRun)} onClose={() => setSelectedRun(null)}>
         {selectedRun ? (
           <div className="detailGrid">
             <div>
-              <span>Provider</span>
+              <span>Поставщик данных</span>
               <strong>{selectedRun.provider}</strong>
             </div>
             <div>
-              <span>Model</span>
+              <span>Вариант прогноза</span>
               <strong>{selectedRun.model}</strong>
             </div>
             <div>
-              <span>Source</span>
+              <span>Тип данных</span>
               <strong>{sourceLabel(selectedRun.source)}</strong>
             </div>
             <div>
-              <span>Run at</span>
+              <span>Дата проверки</span>
               <strong>{formatDateTime(selectedRun.run_at)}</strong>
             </div>
             <div>
-              <span>Requested stations</span>
+              <span>Запрошено станций</span>
               <strong>{formatNumber(selectedRun.requested_station_count)}</strong>
             </div>
             <div>
-              <span>Saved stations</span>
+              <span>Сохранено станций</span>
               <strong>{formatNumber(selectedRun.saved_stations)}</strong>
             </div>
             <div>
-              <span>Saved rows</span>
+              <span>Сохранено записей</span>
               <strong>{formatNumber(selectedRun.saved_rows)}</strong>
             </div>
             <div>
-              <span>Completed</span>
+              <span>Завершено</span>
               <strong>{formatDateTime(selectedRun.completed_at)}</strong>
             </div>
             {selectedRun.error_message ? (

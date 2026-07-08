@@ -7,7 +7,7 @@ import { EmptyState, ErrorState, SkeletonGrid } from "../components/DataState";
 import { MetricCard } from "../components/MetricCard";
 import { StatusBadge } from "../components/StatusBadge";
 import type { AnalyticsSummaryResponse, ForecastCoverageResponse, ForecastRunsResponse, StationsResponse } from "../types";
-import { defaultRange, formatDate, formatDateTime, formatNumber, isRoleAtLeast, metricLabels } from "../utils";
+import { coverageLabel, defaultRange, formatDate, formatDateTime, formatNumber, isRoleAtLeast, metricLabels, sourceLabel } from "../utils";
 
 interface DashboardData {
   summary: AnalyticsSummaryResponse | null;
@@ -32,19 +32,35 @@ export function DashboardPage() {
 
   useEffect(() => {
     let active = true;
+    const settle = async <T,>(promise: Promise<T>, label: string): Promise<T | null> => {
+      const timeout = new Promise<null>((resolve) => {
+        window.setTimeout(() => resolve(null), 12000);
+      });
+
+      try {
+        return await Promise.race([promise, timeout]);
+      } catch (err) {
+        console.warn(`SkyCast dashboard request failed: ${label}`, err);
+        return null;
+      }
+    };
+
     async function load() {
       setLoading(true);
       setError(null);
       try {
         const [summary, runs, stations, coverage, adminCoverage] = await Promise.all([
-          api.summary({ start_date: range.start, end_date: range.end, only_with_coordinates: true }),
-          api.forecastRuns({ limit: 6 }),
-          api.stations({ limit: 500 }),
-          api.forecastCoverage({ start_date: range.start, end_date: range.end }),
-          isRoleAtLeast(user?.role, "admin") ? api.coverage().catch(() => null) : Promise.resolve(null)
+          settle(api.summary({ start_date: range.start, end_date: range.end, only_with_coordinates: true }), "summary"),
+          settle(api.forecastRuns({ limit: 6 }), "checks"),
+          settle(api.stations({ limit: 500 }), "stations"),
+          settle(api.forecastCoverage({ start_date: range.start, end_date: range.end }), "coverage"),
+          isRoleAtLeast(user?.role, "admin") ? settle(api.coverage(), "service overview") : Promise.resolve(null)
         ]);
         if (active) {
           setData({ summary, runs, stations, coverage, adminCoverage });
+          if (!summary && !runs && !stations && !coverage) {
+            setError("Не удалось быстро получить данные кабинета. Сервис ответил, но данные загружаются слишком долго.");
+          }
         }
       } catch (err) {
         if (active) {
@@ -76,7 +92,7 @@ export function DashboardPage() {
         <div>
           <span>Личный кабинет</span>
           <h1>Здравствуйте, {user?.full_name || "пользователь"}</h1>
-          <p>Сводка по данным за период {formatDate(range.start)} - {formatDate(range.end)}.</p>
+          <p>Короткая сводка за период {formatDate(range.start)} - {formatDate(range.end)}.</p>
         </div>
         <div className="headerActions">
           <Link className="ghostButton" to="/app/forecasts">
@@ -85,7 +101,7 @@ export function DashboardPage() {
           </Link>
           <Link className="primaryButton" to="/app/analytics">
             <BarChart3 size={18} />
-            Аналитика
+            Графики
           </Link>
         </div>
       </div>
@@ -106,16 +122,16 @@ export function DashboardPage() {
             />
             <MetricCard
               icon={ThermometerSun}
-              label="MAE температуры"
+              label="Ошибка температуры"
               value={avgTempMetric?.mae === null || avgTempMetric?.mae === undefined ? "нет данных" : `${formatNumber(avgTempMetric.mae, 1)} °C`}
-              hint={`RMSE ${formatNumber(avgTempMetric?.rmse, 1)}`}
+              hint="средняя разница"
               tone="amber"
             />
             <MetricCard
               icon={Database}
-              label="Строк прогноза"
+              label="Прогнозных записей"
               value={formatNumber(forecastRows)}
-              hint={`Факт: ${formatNumber(actualRows)}`}
+              hint={`фактических записей: ${formatNumber(actualRows)}`}
               tone="coral"
             />
           </div>
@@ -124,8 +140,8 @@ export function DashboardPage() {
             <article className="panel">
               <div className="panelHeader">
                 <div>
-                  <span>Последние проверки</span>
-                  <h2>Запуски прогнозов</h2>
+                  <span>Последнее</span>
+                  <h2>Проверки прогноза</h2>
                 </div>
                 <Link className="textLink" to="/app/forecasts">
                   Открыть <ArrowRight size={16} />
@@ -136,28 +152,28 @@ export function DashboardPage() {
                   {data.runs.runs.map((run) => (
                     <div className="runRow" key={run.id}>
                       <div>
-                        <strong>#{run.id} · {run.model}</strong>
+                        <strong>Проверка #{run.id} · {run.model}</strong>
                         <span>
                           {formatDate(run.requested_start_date)} - {formatDate(run.requested_end_date)}
                         </span>
                       </div>
                       <div className="runMeta">
                         <StatusBadge status={run.status} />
-                        <small>{formatNumber(run.saved_rows)} строк</small>
+                        <small>{formatNumber(run.saved_rows)} записей</small>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <EmptyState title="Проверок пока нет" text="Backend не вернул forecast runs для вашего аккаунта." />
+                <EmptyState title="Проверок пока нет" text="За этот период прогнозы еще не найдены." />
               )}
             </article>
 
             <article className="panel">
               <div className="panelHeader">
                 <div>
-                  <span>Покрытие</span>
-                  <h2>Данные прогноза</h2>
+                  <span>Наличие данных</span>
+                  <h2>Где есть прогноз</h2>
                 </div>
               </div>
               {data.coverage?.items.length ? (
@@ -167,18 +183,18 @@ export function DashboardPage() {
                       <div>
                         <strong>{item.model}</strong>
                         <span>
-                          {item.source}, horizon {item.horizon_days}
+                          {sourceLabel(item.source)}, {item.horizon_days} дн.
                         </span>
                       </div>
                       <div className="barTrack">
                         <span style={{ width: `${Math.min(100, Math.max(6, item.station_count))}%` }} />
                       </div>
-                      <small>{formatNumber(item.forecast_rows)} строк</small>
+                      <small>{formatNumber(item.forecast_rows)} записей</small>
                     </div>
                   ))}
                 </div>
               ) : (
-                <EmptyState title="Покрытия нет" text="За выбранный период forecast coverage пуст." />
+                <EmptyState title="Данных пока нет" text="За выбранный период прогнозы не найдены." />
               )}
             </article>
           </div>
@@ -196,7 +212,7 @@ export function DashboardPage() {
             </Link>
             <Link className="quickTile" to="/app/analytics">
               <BarChart3 size={22} />
-              <strong>Графики ошибок</strong>
+              <strong>Графики точности</strong>
               <span>Средние ошибки, крупные отклонения и динамика.</span>
             </Link>
           </div>
@@ -206,7 +222,7 @@ export function DashboardPage() {
               <div className="panelHeader">
                 <div>
                   <span>Система</span>
-                  <h2>Состояние хранилища</h2>
+                  <h2>Служебная сводка</h2>
                 </div>
                 <small>Обновлено {formatDateTime(new Date().toISOString())}</small>
               </div>
@@ -215,7 +231,7 @@ export function DashboardPage() {
                   .slice(0, 8)
                   .map(([key, value]) => (
                     <div key={key}>
-                      <span>{key}</span>
+                      <span>{coverageLabel(key)}</span>
                       <strong>{formatNumber(value)}</strong>
                     </div>
                   ))}

@@ -267,6 +267,12 @@ button:disabled {
     linear-gradient(180deg, rgba(3, 9, 22, 0.12) 0%, rgba(3, 9, 22, 0.68) 100%);
 }
 
+:root[data-theme="light"] .heroOverlay {
+  background:
+    linear-gradient(90deg, rgba(6, 13, 28, 0.9) 0%, rgba(6, 13, 28, 0.74) 42%, rgba(6, 13, 28, 0.32) 76%, rgba(6, 13, 28, 0.58) 100%),
+    linear-gradient(180deg, rgba(6, 13, 28, 0.12) 0%, rgba(6, 13, 28, 0.72) 100%);
+}
+
 .heroContent {
   display: grid;
   grid-template-columns: minmax(0, 1.04fr) minmax(320px, 0.78fr);
@@ -287,6 +293,7 @@ button:disabled {
   font-size: clamp(40px, 5.7vw, 72px);
   line-height: 1.08;
   font-weight: 860;
+  color: #ffffff;
 }
 
 .heroCopy h1 span {
@@ -304,6 +311,16 @@ button:disabled {
 .heroChecks {
   flex-wrap: wrap;
   color: #d7e2f3;
+}
+
+.heroActions .ghostButton {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.heroActions .ghostButton:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .heroChecks span {
@@ -327,6 +344,105 @@ button:disabled {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), rgba(15, 44, 90, 0.58));
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px);
+  color: #ffffff;
+}
+
+.weatherGlass span,
+.weatherGlass small {
+  color: #d7e2f3;
+}
+
+.glassHeader > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.glassHeader strong {
+  font-size: 22px;
+}
+
+.glassIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: var(--radius);
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.glassMetricRow {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.matchRing {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  min-height: 150px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, rgba(8, 25, 55, 0.92) 0 58%, transparent 59%),
+    conic-gradient(#22c55e 0 92%, rgba(255, 255, 255, 0.18) 92% 100%);
+}
+
+.matchRing strong {
+  font-size: 38px;
+  line-height: 1;
+}
+
+.matchRing span {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.glassFacts {
+  display: grid;
+  gap: 10px;
+}
+
+.glassFacts > div {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  background: rgba(8, 25, 55, 0.46);
+}
+
+.glassFacts svg,
+.glassFooter svg {
+  color: #7dd3fc;
+}
+
+.glassFacts strong {
+  font-size: 22px;
+}
+
+.glassChart {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: end;
+  gap: 8px;
+  height: 96px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius);
+  background: rgba(8, 25, 55, 0.32);
+}
+
+.glassChart span {
+  display: block;
+  min-height: 18px;
+  border-radius: 6px 6px 2px 2px;
+  background: linear-gradient(180deg, #38bdf8, #22c55e);
 }
 
 .glassHeader,
@@ -353,6 +469,12 @@ button:disabled {
 .metricCard span,
 .detailGrid span {
   color: var(--muted);
+}
+
+.weatherGlass .glassHeader span,
+.weatherGlass .glassFooter span,
+.weatherGlass .glassFacts span {
+  color: #d7e2f3;
 }
 
 .glassGrid {
@@ -549,11 +671,59 @@ select:focus {
 }
 
 .inputShell input {
+  flex: 1;
+  min-width: 0;
   min-height: 40px;
   border: 0;
   padding: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.passwordToggle {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.passwordToggle:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.textButton {
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.alignStart {
+  justify-self: start;
+}
+
+.recoveryBox {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.recoveryBox strong {
+  color: var(--text);
 }
 
 .inlineError,
@@ -656,7 +826,7 @@ select:focus {
   top: 0;
 }
 
-.searchShell {
+.topbarSummary {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -667,6 +837,10 @@ select:focus {
   border-radius: var(--radius);
   color: var(--muted);
   background: var(--surface-soft);
+}
+
+.topbarSummary svg {
+  color: var(--cyan);
 }
 
 .content {
@@ -862,6 +1036,20 @@ select:focus {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.mainFilters {
+  align-items: end;
+}
+
+.advancedPanel {
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.filterToggle {
+  align-self: end;
+  min-height: 42px;
 }
 
 .inlineFilters,
@@ -1274,6 +1462,7 @@ tr:hover td {
   }
 
   .glassGrid,
+  .glassMetricRow,
   .featureGrid,
   .metricGrid,
   .forecastCards,
@@ -1302,7 +1491,7 @@ tr:hover td {
     padding: 16px;
   }
 
-  .searchShell {
+  .topbarSummary {
     min-width: 0;
   }
 }

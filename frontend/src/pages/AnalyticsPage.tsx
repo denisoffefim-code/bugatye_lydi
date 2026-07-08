@@ -1,4 +1,4 @@
-import { BarChart3, Gauge, LineChart as LineIcon, Medal, PieChart as PieIcon, Search } from "lucide-react";
+import { BarChart3, Gauge, LineChart as LineIcon, Medal, PieChart as PieIcon, Search, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
@@ -53,6 +53,7 @@ export function AnalyticsPage() {
   const [coverage, setCoverage] = useState<ForecastCoverageResponse | null>(null);
   const [series, setSeries] = useState<StationSeriesResponse | null>(null);
   const [sourceRatings, setSourceRatings] = useState<SourceRating[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -223,13 +224,24 @@ export function AnalyticsPage() {
     <section className="pageStack">
       <div className="pageHeader">
         <div>
-          <span>Аналитика</span>
-          <h1>Панель точности прогнозов</h1>
-          <p>Сводные показатели, ошибки, станции и динамика выбранного периода.</p>
+          <span>Графики</span>
+          <h1>Графики точности прогнозов</h1>
+          <p>Короткая сводка по совпадениям, ошибкам и динамике выбранного периода.</p>
         </div>
       </div>
 
-      <div className="filterPanel">
+      <div className="filterPanel mainFilters">
+        <label>
+          <span>Город</span>
+          <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
+            <option value="">Не выбран</option>
+            {stations.map((station) => (
+              <option key={station.id} value={station.id}>
+                {station.name} · {station.wmo_index}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           <span>С даты</span>
           <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -239,7 +251,7 @@ export function AnalyticsPage() {
           <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
         </label>
         <label>
-          <span>Метрика</span>
+          <span>Что смотреть</span>
           <select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>
             <option value="avg_temp">Средняя температура</option>
             <option value="min_temp">Минимальная температура</option>
@@ -247,30 +259,39 @@ export function AnalyticsPage() {
             <option value="precipitation">Осадки</option>
           </select>
         </label>
+        <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+          <SlidersHorizontal size={17} />
+          Дополнительные параметры
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <div className="filterPanel advancedPanel">
         <label>
-          <span>Источник</span>
+          <span>Тип данных</span>
           <select value={source} onChange={(event) => setSource(event.target.value as Source | "")}>
             <option value="">Все</option>
-            <option value="forecast">forecast</option>
-            <option value="previous_runs">historical</option>
+            <option value="forecast">Новые прогнозы</option>
+            <option value="previous_runs">Прошлые прогнозы</option>
           </select>
         </label>
         <label className="inputShell">
           <Search size={17} />
-          <input placeholder="Модель" value={model} onChange={(event) => setModel(event.target.value)} />
+          <input placeholder="Вариант прогноза" value={model} onChange={(event) => setModel(event.target.value)} />
         </label>
         <label>
-          <span>Horizon</span>
+          <span>Дней вперед</span>
           <select value={horizon} onChange={(event) => setHorizon(event.target.value ? Number(event.target.value) : "")}>
             <option value="">Все</option>
             {[1, 2, 3, 4, 5, 6, 7].map((value) => (
               <option key={value} value={value}>
-                {value}
+                {value} дн.
               </option>
             ))}
           </select>
         </label>
-      </div>
+        </div>
+      ) : null}
 
       {loading ? <SkeletonGrid cards={4} /> : null}
       {error ? <ErrorState text={error} /> : null}
@@ -287,23 +308,23 @@ export function AnalyticsPage() {
             />
             <MetricCard
               icon={BarChart3}
-              label="RMSE"
+              label="Разброс ошибки"
               value={metricSummary?.rmse === null || metricSummary?.rmse === undefined ? "нет данных" : formatNumber(metricSummary.rmse, 1)}
-              hint={`Bias ${formatNumber(metricSummary?.bias, 1)}`}
+              hint={`среднее смещение ${formatNumber(metricSummary?.bias, 1)}`}
               tone="green"
             />
             <MetricCard
               icon={Medal}
               label="Сравнений"
               value={formatNumber(metricSummary?.compared_points)}
-              hint={`Макс. ошибка ${formatNumber(metricSummary?.max_absolute_error, 1)}`}
+              hint={`самая большая разница ${formatNumber(metricSummary?.max_absolute_error, 1)}`}
               tone="amber"
             />
             <MetricCard
               icon={PieIcon}
-              label="Покрытий"
+              label="Наборов данных"
               value={formatNumber(coverage?.returned)}
-              hint={`${formatNumber(summary?.totals.forecast_rows)} прогнозных строк`}
+              hint={`${formatNumber(summary?.totals.forecast_rows)} прогнозных записей`}
               tone="coral"
             />
           </div>
@@ -313,7 +334,7 @@ export function AnalyticsPage() {
               <div className="panelHeader">
                 <div>
                   <span>Ошибки</span>
-                  <h2>Крупные ошибки</h2>
+                  <h2>Самые большие расхождения</h2>
                 </div>
                 <BarChart3 size={20} />
               </div>
@@ -328,14 +349,14 @@ export function AnalyticsPage() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <EmptyState title="Ошибок нет" text="Backend не вернул top-errors для выбранных фильтров." />
+                <EmptyState title="Ошибок нет" text="За выбранный период расхождения не найдены." />
               )}
             </article>
 
             <article className="panel chartPanel">
               <div className="panelHeader">
                 <div>
-                  <span>Источники</span>
+                  <span>Типы данных</span>
                   <h2>Рейтинг точности</h2>
                 </div>
                 <Medal size={20} />
@@ -348,8 +369,8 @@ export function AnalyticsPage() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="mae" name="MAE" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="rmse" name="RMSE" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="mae" name="Средняя ошибка" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="rmse" name="Разброс ошибки" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
@@ -360,8 +381,8 @@ export function AnalyticsPage() {
             <article className="panel chartPanel">
               <div className="panelHeader">
                 <div>
-                  <span>Статусы</span>
-                  <h2>Распределение ошибок</h2>
+                  <span>Оценка</span>
+                  <h2>Насколько сильны ошибки</h2>
                 </div>
                 <PieIcon size={20} />
               </div>
@@ -378,7 +399,7 @@ export function AnalyticsPage() {
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <EmptyState title="Статусов нет" text="Нет строк для построения диаграммы." />
+                <EmptyState title="Диаграмма пуста" text="Нет данных для построения графика." />
               )}
             </article>
 
@@ -389,19 +410,6 @@ export function AnalyticsPage() {
                   <h2>Прогноз и факт</h2>
                 </div>
                 <LineIcon size={20} />
-              </div>
-              <div className="inlineFilters">
-                <label>
-                  <span>Станция</span>
-                  <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
-                    <option value="">Не выбрана</option>
-                    {stations.map((station) => (
-                      <option key={station.id} value={station.id}>
-                        {station.name} · {station.wmo_index}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               </div>
               {seriesLoading ? <LoadingPanel /> : null}
               {seriesError ? <ErrorState text={seriesError} /> : null}
@@ -428,7 +436,7 @@ export function AnalyticsPage() {
             <div className="panelHeader">
               <div>
                 <span>Станции</span>
-                <h2>Худшие MAE</h2>
+                <h2>Где прогноз хуже всего</h2>
               </div>
             </div>
             {worstStations?.items.length ? (
@@ -437,9 +445,9 @@ export function AnalyticsPage() {
                   <thead>
                     <tr>
                       <th>Станция</th>
-                      <th>WMO</th>
+                      <th>Номер станции</th>
                       <th>Сравнений</th>
-                      <th>MAE</th>
+                      <th>Средняя ошибка</th>
                       <th>Макс. ошибка</th>
                     </tr>
                   </thead>

@@ -1,4 +1,4 @@
-import { ArrowRight, Lock, Mail, UserRound } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Lock, Mail, UserRound } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { formatApiError } from "../api/client";
@@ -10,6 +10,8 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const { login, register } = useAuth();
@@ -43,8 +45,8 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <h1>{isRegister ? "Создать аккаунт" : "Войти в SkyCast"}</h1>
           <p>
             {isRegister
-              ? "После регистрации будет создан viewer-аккаунт с доступом к аналитическим разделам."
-              : "Используйте учетную запись SkyCast для доступа к личному кабинету и аналитике."}
+              ? "Создайте аккаунт, чтобы начать пользоваться сервисом."
+              : "Войдите, чтобы открыть личный кабинет и пользоваться графиками."}
           </p>
         </div>
 
@@ -59,7 +61,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
             </label>
           ) : null}
           <label>
-            <span>Email</span>
+            <span>Электронная почта</span>
             <div className="inputShell">
               <Mail size={18} />
               <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
@@ -72,12 +74,40 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               <input
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                type="password"
+                type={passwordVisible ? "text" : "password"}
                 minLength={8}
                 required
               />
+              <button
+                className="passwordToggle"
+                type="button"
+                onClick={() => setPasswordVisible((current) => !current)}
+                aria-label={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
+                title={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
           </label>
+
+          {!isRegister ? (
+            <button className="textButton alignStart" type="button" onClick={() => setRecoveryOpen((current) => !current)}>
+              Забыли пароль?
+            </button>
+          ) : null}
+
+          {recoveryOpen && !isRegister ? (
+            <div className="recoveryBox">
+              <strong>Восстановление доступа</strong>
+              <span>
+                Укажите почту аккаунта и передайте запрос человеку, который выдал вам доступ к SkyCast. Он сможет назначить новый пароль.
+              </span>
+              <div className="inputShell">
+                <Mail size={18} />
+                <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="Ваша почта" />
+              </div>
+            </div>
+          ) : null}
 
           {formError ? <div className="inlineError">{formError}</div> : null}
 

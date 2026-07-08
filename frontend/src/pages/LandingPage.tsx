@@ -1,26 +1,26 @@
-import { ArrowRight, BarChart3, Bell, CheckCircle2, CloudSun, DatabaseZap, PlayCircle, ShieldCheck } from "lucide-react";
+import { Activity, ArrowRight, BarChart3, CheckCircle2, CloudSun, Gauge, MapPin, PlayCircle, ShieldCheck, TrendingUp } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const features = [
   {
     icon: CloudSun,
-    title: "Прогнозы и факт",
-    text: "Сравнивайте прогнозы, станции и фактические наблюдения в одном интерфейсе."
+    title: "Прогноз и реальная погода рядом",
+    text: "Выберите город и период, чтобы увидеть прогноз и фактическую погоду в одном месте."
   },
   {
-    icon: BarChart3,
-    title: "Аналитика ошибок",
-    text: "Оценивайте среднюю ошибку, отклонения и проблемные станции за выбранный период."
+    icon: Gauge,
+    title: "Понятная оценка точности",
+    text: "Сервис показывает, насколько прогноз совпал с фактом, без сложных расчетов на экране."
   },
   {
     icon: ShieldCheck,
-    title: "RBAC-доступ",
-    text: "Роли доступа помогают разделять просмотр, аналитику и администрирование."
+    title: "Разные уровни доступа",
+    text: "Каждый человек видит только те разделы, которые нужны ему для работы."
   },
   {
-    icon: DatabaseZap,
-    title: "Надежные источники",
-    text: "Интерфейс работает с реальными источниками и не подмешивает клиентские данные."
+    icon: BarChart3,
+    title: "Графики без перегруза",
+    text: "Ошибки, совпадения и динамика собраны в аккуратные карточки и таблицы."
   }
 ];
 
@@ -32,13 +32,11 @@ export function LandingPage() {
         <div className="heroOverlay" />
         <div className="heroContent">
           <div className="heroCopy">
-            <h1>
-              Точный прогноз. Реальная погода. <span>Умный анализ.</span>
-            </h1>
-            <p>SkyCast сравнивает прогнозы с наблюдениями и показывает, каким данным можно доверять.</p>
+            <h1>SkyCast</h1>
+            <p>Сервис сравнивает прогноз погоды с фактической погодой и сразу показывает, насколько прогнозу можно доверять.</p>
             <div className="heroActions">
               <Link className="primaryButton" to="/register">
-                Начать бесплатно
+                Начать пользоваться
                 <ArrowRight size={18} />
               </Link>
               <a className="ghostButton" href="#how">
@@ -48,39 +46,54 @@ export function LandingPage() {
             </div>
             <div className="heroChecks">
               <span>
-                <CheckCircle2 size={17} /> Живые данные
+                <CheckCircle2 size={17} /> Понятные графики
               </span>
               <span>
-                <CheckCircle2 size={17} /> Защищенные страницы
+                <CheckCircle2 size={17} /> Русский интерфейс
               </span>
               <span>
-                <CheckCircle2 size={17} /> Адаптивный UI
+                <CheckCircle2 size={17} /> Быстрый выбор данных
               </span>
             </div>
           </div>
 
           <aside className="weatherGlass" aria-label="Пример аналитической карточки">
             <div className="glassHeader">
-              <strong>Москва, Россия</strong>
-              <span>Пример карточки</span>
-            </div>
-            <div className="glassGrid">
               <div>
-                <small>Прогноз</small>
-                <strong>18°C</strong>
-                <span>Облачность</span>
+                <span>Москва</span>
+                <strong>Точность прогноза</strong>
               </div>
-              <div>
-                <small>Факт</small>
-                <strong>17°C</strong>
-                <span>Наблюдение</span>
+              <div className="glassIcon">
+                <TrendingUp size={19} />
               </div>
             </div>
-            <div className="accuracyLine">
-              <span />
+            <div className="glassMetricRow">
+              <div className="matchRing" aria-label="Совпадение 92 процента">
+                <strong>92%</strong>
+                <span>совпадение</span>
+              </div>
+              <div className="glassFacts">
+                <div>
+                  <CloudSun size={18} />
+                  <span>Прогноз</span>
+                  <strong>18 °C</strong>
+                </div>
+                <div>
+                  <MapPin size={18} />
+                  <span>Факт</span>
+                  <strong>17 °C</strong>
+                </div>
+              </div>
+            </div>
+            <div className="glassChart" aria-hidden="true">
+              {[42, 68, 56, 82, 74, 90, 78].map((height, index) => (
+                <span key={index} style={{ height: `${height}%` }} />
+              ))}
             </div>
             <div className="glassFooter">
-              <span>Ошибка температуры</span>
+              <span>
+                <Activity size={16} /> Средняя разница
+              </span>
               <strong>1°C</strong>
             </div>
           </aside>
@@ -107,32 +120,32 @@ export function LandingPage() {
 
       <section className="howBand" id="how">
         <div className="sectionHeader">
-          <span>Поток данных</span>
+          <span>Порядок работы</span>
           <h2>Как это работает</h2>
         </div>
         <div className="timeline">
           <article>
-            <CloudSun size={23} />
-            <strong>1. Загрузка прогнозов</strong>
-            <p>Backend сохраняет forecast runs и значения по станциям.</p>
+            <MapPin size={23} />
+            <strong>1. Выберите город</strong>
+            <p>Начните с нужной станции или населенного пункта.</p>
           </article>
           <article>
-            <Bell size={23} />
-            <strong>2. Прием факта</strong>
-            <p>Telemetry endpoint пишет наблюдения в operational store.</p>
+            <CloudSun size={23} />
+            <strong>2. Укажите период</strong>
+            <p>Выберите даты, за которые хотите проверить погоду.</p>
           </article>
           <article>
             <BarChart3 size={23} />
-            <strong>3. Аналитика</strong>
-            <p>Read models считают ошибки и рейтинги для интерфейса.</p>
+            <strong>3. Получите результат</strong>
+            <p>Смотрите прогноз, факт и разницу в понятных карточках.</p>
           </article>
         </div>
       </section>
 
-      <section className="contactBand" id="contacts">
+      <section className="contactBand">
         <div>
           <span>Готово к работе</span>
-          <h2>Перейдите в кабинет и подключитесь к данным backend.</h2>
+          <h2>Откройте кабинет и посмотрите прогноз рядом с фактической погодой.</h2>
         </div>
         <Link className="primaryButton" to="/login">
           Открыть кабинет

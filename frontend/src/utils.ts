@@ -16,9 +16,58 @@ export const metricUnits: Record<Metric, string> = {
 
 export function sourceLabel(source: Source | null | undefined) {
   if (!source) {
-    return "любой";
+    return "любой источник";
   }
-  return source === "previous_runs" ? "historical" : "forecast";
+  return source === "previous_runs" ? "прошлые прогнозы" : "новые прогнозы";
+}
+
+export function statusLabel(status: string | null | undefined) {
+  const normalized = (status || "").toLowerCase();
+  if (!normalized) {
+    return "нет данных";
+  }
+  if (normalized.includes("success") || normalized.includes("ok") || normalized.includes("done") || normalized.includes("complete")) {
+    return "готово";
+  }
+  if (normalized.includes("partial")) {
+    return "частично";
+  }
+  if (normalized.includes("pending") || normalized.includes("running") || normalized.includes("progress")) {
+    return "в работе";
+  }
+  if (normalized.includes("failed") || normalized.includes("error")) {
+    return "ошибка";
+  }
+  return normalized.replace(/[_-]+/g, " ");
+}
+
+export function roleLabel(role: string | null | undefined) {
+  const normalized = (role || "").toLowerCase();
+  if (normalized === "admin") {
+    return "управляет доступом";
+  }
+  if (normalized === "analyst") {
+    return "работает с анализом";
+  }
+  return "пользователь";
+}
+
+export function coverageLabel(key: string) {
+  const labels: Record<string, string> = {
+    forecast_rows: "Прогнозных записей",
+    actual_rows: "Фактических записей",
+    weather_rows: "Фактических записей",
+    station_count: "Станций",
+    stations: "Станций",
+    returned: "Показано",
+    run_count: "Проверок",
+    avg_temp_rows: "Средняя температура",
+    min_temp_rows: "Минимальная температура",
+    max_temp_rows: "Максимальная температура",
+    precipitation_rows: "Осадки",
+    max_wind_speed_rows: "Ветер"
+  };
+  return labels[key] || key.replace(/[_-]+/g, " ");
 }
 
 export function defaultRange(days = 30) {

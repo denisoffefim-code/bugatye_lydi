@@ -25,7 +25,7 @@ export class ApiError extends Error {
   detail: unknown;
 
   constructor(status: number, detail: unknown) {
-    super(typeof detail === "string" ? detail : `API request failed with status ${status}`);
+    super(typeof detail === "string" ? detail : `Не удалось получить ответ сервиса. Код: ${status}`);
     this.status = status;
     this.detail = detail;
   }
@@ -173,10 +173,34 @@ export const api = {
 
 export function formatApiError(error: unknown) {
   if (error instanceof ApiError) {
-    return typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail);
+    return humanError(error.detail);
   }
   if (error instanceof Error) {
-    return error.message;
+    return humanError(error.message);
   }
   return "Не удалось выполнить запрос.";
+}
+
+function humanError(detail: unknown) {
+  const text = typeof detail === "string" ? detail : JSON.stringify(detail);
+  const normalized = text.toLowerCase();
+  if (normalized.includes("invalid email or password")) {
+    return "Неверная почта или пароль.";
+  }
+  if (normalized.includes("password must be at least")) {
+    return "Пароль должен быть не короче 8 символов.";
+  }
+  if (normalized.includes("password must be at most")) {
+    return "Пароль слишком длинный.";
+  }
+  if (normalized.includes("already") && normalized.includes("email")) {
+    return "Аккаунт с такой почтой уже существует.";
+  }
+  if (normalized.includes("unauthorized") || normalized.includes("not authenticated")) {
+    return "Войдите в аккаунт еще раз.";
+  }
+  if (normalized.includes("failed to fetch")) {
+    return "Не удалось связаться с сервисом. Проверьте подключение и попробуйте снова.";
+  }
+  return text || "Не удалось выполнить запрос.";
 }

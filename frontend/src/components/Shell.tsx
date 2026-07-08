@@ -7,7 +7,6 @@ import {
   LogOut,
   Menu,
   Moon,
-  Search,
   Sun,
   ThermometerSun,
   X
@@ -15,14 +14,15 @@ import {
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { roleLabel } from "../utils";
 import { Logo } from "./Logo";
 
 const navItems = [
-  { to: "/app", label: "Кабинет", icon: LayoutDashboard, end: true },
+  { to: "/app", label: "Главная", icon: LayoutDashboard, end: true },
   { to: "/app/forecasts", label: "Прогнозы", icon: CloudSun },
-  { to: "/app/observations", label: "Факт", icon: ThermometerSun },
+  { to: "/app/observations", label: "Фактическая погода", icon: ThermometerSun },
   { to: "/app/compare", label: "Сравнение", icon: GitCompareArrows },
-  { to: "/app/analytics", label: "Аналитика", icon: BarChart3 }
+  { to: "/app/analytics", label: "Графики", icon: BarChart3 }
 ];
 
 export function PublicShell({
@@ -41,7 +41,6 @@ export function PublicShell({
         <nav className="publicNav" aria-label="Главная навигация">
           <a href="/#features">Возможности</a>
           <a href="/#how">Как работает</a>
-          <a href="/#contacts">Контакты</a>
         </nav>
         <div className="topbarActions">
           <button className="iconButton" type="button" onClick={onToggleTheme} aria-label="Переключить тему">
@@ -96,7 +95,7 @@ export function AppShell({
         <div className="sidebarFooter">
           <div className="userMini">
             <strong>{user?.full_name || "Пользователь"}</strong>
-            <span>{user?.role || "viewer"}</span>
+            <span>{roleLabel(user?.role)}</span>
           </div>
           <button className="ghostButton fullWidth" type="button" onClick={handleLogout}>
             <LogOut size={17} />
@@ -110,14 +109,14 @@ export function AppShell({
           <button className="iconButton mobileOnly" type="button" onClick={() => setMobileOpen(true)} aria-label="Открыть меню">
             <Menu size={19} />
           </button>
-          <div className="searchShell">
-            <Search size={17} />
-            <span>SkyCast analytics</span>
+          <div className="topbarSummary">
+            <CloudSun size={18} />
+            <span>Погода и прогнозы</span>
           </div>
           <div className="topbarActions">
             <NavLink className="ghostButton desktopOnly" to="/">
               <Home size={17} />
-              Главная
+              На сайт
             </NavLink>
             <button className="iconButton" type="button" onClick={onToggleTheme} aria-label="Переключить тему">
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}

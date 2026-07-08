@@ -112,15 +112,15 @@ export function ObservationsPage() {
         <div>
           <span>Фактическая погода</span>
           <h1>Наблюдения по станциям</h1>
-          <p>Выберите станцию и период, чтобы увидеть сохраненные погодные факты.</p>
+          <p>Выберите город или станцию и период, чтобы увидеть реальную погоду.</p>
         </div>
       </div>
 
       <div className="filterPanel">
         <label>
-          <span>Станция</span>
+          <span>Город или станция</span>
           <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
-            <option value="">Не выбрана</option>
+              <option value="">Не выбрано</option>
             {stations.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} · {item.wmo_index}
@@ -138,7 +138,7 @@ export function ObservationsPage() {
         </label>
         <label className="inputShell">
           <Search size={17} />
-          <input placeholder="Поиск по дате или станции" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <input placeholder="Дата или название" value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
       </div>
 
@@ -148,16 +148,16 @@ export function ObservationsPage() {
       {!loading && !error ? (
         <>
           <div className="metricGrid">
-            <MetricCard icon={MapPin} label="Станция" value={station?.wmo_index || "не выбрана"} hint={station?.name} tone="blue" />
+            <MetricCard icon={MapPin} label="Выбрано" value={station?.wmo_index || "не выбрано"} hint={station?.name} tone="blue" />
             <MetricCard
               icon={CalendarDays}
-              label="Период факта"
+              label="Период наблюдений"
               value={`${formatDate(String(stats.weather_start_date || ""))}`}
               hint={`до ${formatDate(String(stats.weather_end_date || ""))}`}
               tone="green"
             />
             <MetricCard icon={ThermometerSun} label="Наблюдений" value={formatNumber(stats.weather_rows)} tone="amber" />
-            <MetricCard icon={CloudSun} label="Прогнозов рядом" value={formatNumber(stats.forecast_rows)} tone="coral" />
+            <MetricCard icon={CloudSun} label="Прогнозных записей" value={formatNumber(stats.forecast_rows)} tone="coral" />
           </div>
 
           <article className="panel">

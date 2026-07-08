@@ -1,3 +1,5 @@
+import { statusLabel } from "../utils";
+
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const normalized = (status || "unknown").toLowerCase();
   const tone =
@@ -9,7 +11,7 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
           ? "bad"
           : "neutral";
 
-  return <span className={`statusBadge ${tone}`}>{status || "unknown"}</span>;
+  return <span className={`statusBadge ${tone}`}>{statusLabel(status)}</span>;
 }
 
 export function AccuracyBadge({ value }: { value: number | null }) {

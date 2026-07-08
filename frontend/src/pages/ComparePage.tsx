@@ -1,4 +1,4 @@
-import { CheckCircle2, GitCompareArrows, Search, XCircle } from "lucide-react";
+import { CheckCircle2, GitCompareArrows, Search, SlidersHorizontal, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../api/client";
 import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../components/DataState";
@@ -26,6 +26,7 @@ export function ComparePage() {
   const [horizon, setHorizon] = useState<number | "">("");
   const [forecastKey, setForecastKey] = useState("");
   const [actualKey, setActualKey] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,15 +135,15 @@ export function ComparePage() {
         <div>
           <span>Сравнение</span>
           <h1>Прогноз против факта</h1>
-          <p>Выберите прогнозную запись и фактическое наблюдение по одной станции.</p>
+          <p>Выберите город и период, затем сравните прогноз с реальной погодой.</p>
         </div>
       </div>
 
-      <div className="filterPanel">
+      <div className="filterPanel mainFilters">
         <label>
-          <span>Станция</span>
+          <span>1. Город</span>
           <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
-            <option value="">Не выбрана</option>
+            <option value="">Не выбран</option>
             {stations.map((station) => (
               <option key={station.id} value={station.id}>
                 {station.name} · {station.wmo_index}
@@ -151,37 +152,46 @@ export function ComparePage() {
           </select>
         </label>
         <label>
-          <span>С даты</span>
+          <span>2. С даты</span>
           <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
         </label>
         <label>
-          <span>По дату</span>
+          <span>3. По дату</span>
           <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
         </label>
+        <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+          <SlidersHorizontal size={17} />
+          Дополнительные параметры
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <div className="filterPanel advancedPanel">
         <label>
-          <span>Источник</span>
+          <span>Тип данных</span>
           <select value={source} onChange={(event) => setSource(event.target.value as Source | "")}>
             <option value="">Все</option>
-            <option value="forecast">forecast</option>
-            <option value="previous_runs">historical</option>
+            <option value="forecast">Новые прогнозы</option>
+            <option value="previous_runs">Прошлые прогнозы</option>
           </select>
         </label>
         <label className="inputShell">
           <Search size={17} />
-          <input placeholder="Модель" value={model} onChange={(event) => setModel(event.target.value)} />
+          <input placeholder="Вариант прогноза" value={model} onChange={(event) => setModel(event.target.value)} />
         </label>
         <label>
-          <span>Horizon</span>
+          <span>Дней вперед</span>
           <select value={horizon} onChange={(event) => setHorizon(event.target.value ? Number(event.target.value) : "")}>
             <option value="">Все</option>
             {[1, 2, 3, 4, 5, 6, 7].map((value) => (
               <option key={value} value={value}>
-                {value}
+                {value} дн.
               </option>
             ))}
           </select>
         </label>
-      </div>
+        </div>
+      ) : null}
 
       {loading ? <SkeletonGrid cards={3} /> : null}
       {error ? <ErrorState text={error} /> : null}
@@ -191,7 +201,7 @@ export function ComparePage() {
           <article className="panel">
             <div className="panelHeader">
               <div>
-                <span>Выбор</span>
+                <span>4. Выбор данных</span>
                 <h2>{series?.station.name || "Станция"}</h2>
               </div>
               <GitCompareArrows size={20} />
@@ -207,7 +217,7 @@ export function ComparePage() {
                   <select value={forecastKey || forecastOptions[0]?.key || ""} onChange={(event) => setForecastKey(event.target.value)}>
                     {forecastOptions.map(({ item, key }) => (
                       <option key={key} value={key}>
-                        {formatDate(item.observation_date)} · {item.model || "модель"} · {sourceLabel(item.source)} · h{item.horizon_days ?? "-"}
+                        {formatDate(item.observation_date)} · {item.model || "вариант прогноза"} · {sourceLabel(item.source)} · {item.horizon_days ?? "-"} дн.
                       </option>
                     ))}
                   </select>
@@ -250,7 +260,7 @@ export function ComparePage() {
                   <div>
                     <span>Средняя разница</span>
                     <strong>{averageError === null ? "нет данных" : formatNumber(averageError, 1)}</strong>
-                    <small>без смешивания единиц</small>
+                    <small>по выбранным показателям</small>
                   </div>
                 </article>
                 <article className="metricCard tone-coral">
@@ -268,9 +278,9 @@ export function ComparePage() {
               <article className="panel">
                 <div className="panelHeader">
                   <div>
-                    <span>Аналитическая карточка</span>
+                    <span>5. Результат</span>
                     <h2>
-                      {formatDate(selectedForecast.observation_date)} vs {formatDate(selectedActual.observation_date)}
+                      {formatDate(selectedForecast.observation_date)} - {formatDate(selectedActual.observation_date)}
                     </h2>
                   </div>
                 </div>
