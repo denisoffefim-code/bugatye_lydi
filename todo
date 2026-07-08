@@ -1,41 +1,45 @@
-Остаточный TODO по проекту
+Остаточный backlog по проекту
 
-Уже сделано и не требует отдельного пункта в backlog:
+Уже закрыто и не требует отдельного пункта:
 - backend разложен на `forecast-service`, `telemetry-service`, `analytics-api`;
 - есть `raw_telemetry_events`, `raw_forecast_events`, `forecast_values`, `weather_data`, `dm_forecast_errors`;
 - есть базовый auth на `users` и `auth_sessions`;
 - есть `service_outbox`, Redis Streams, Kafka, локальный spool и outbox worker;
 - есть `live` / `ready` / `health` / `metrics`, structured logs и базовые Prometheus-метрики;
-- есть dev-запуск через `docker-compose`.
+- есть dev-запуск через `docker-compose`;
+- analytics endpoints и `forecast-runs` уже `source/model/horizon`-aware;
+- для bulk historical backfill уже есть режим без outbox: `publish_outbox_events=false` / `--skip-outbox`;
+- есть coverage endpoint по historical forecast: `GET /api/analytics/forecast-coverage`;
+- есть safe rerun / bulk backfill runbook в `docs/backfill_runbook.md`;
+- есть RBAC с ролями `admin/analyst/viewer` и endpoint-level checks;
+- есть admin-only операции для forecast fetch / station coordinate backfill / service coverage / revoke user sessions;
+- есть smoke-тесты ролей и отказа в доступе.
 
-P0. Закрыть backend до рабочего production-like состояния
+Сейчас в фокусе:
+- Догрузить historical backfill Open-Meteo `previous_runs` по всем станциям с координатами и горизонтам `1..7`.
+- После завершения backfill зафиксировать фактическое coverage по моделям и полям на основе `forecast-coverage`.
+
+P0. Довести backend до рабочего production-like состояния
 
 1. Данные и backfill
-- Догрузить historical backfill Open-Meteo `previous_runs` по всем станциям с координатами и горизонтам `1..7`.
 - Зафиксировать фактическое покрытие архивных прогнозов по моделям и полям: от какой даты есть `temperature`, `precipitation`, `wind`, где есть пропуски.
-- Зафиксировать operational policy для bulk backfill: когда historical загрузку запускать с `publish_outbox_events=false` / `--skip-outbox`, а когда transport-события всё-таки нужны downstream.
 - Добрать координаты для станций, которых нет в NOAA IGRA, и зафиксировать fallback-источник координат.
-- Описать runbook для повторного backfill: диапазоны дат, chunk size, retry policy, safe rerun, валидация результата.
 
 2. Аналитика и read models
 - Проверить, нужны ли отдельные `dm_*` витрины помимо `dm_forecast_errors`: coverage, station series, summary by station/model/horizon.
-- Зафиксировать контракт аналитики: какая запись считается "latest forecast" для одной даты при нескольких horizon/model/source.
+- Зафиксировать контракт аналитики: какая запись считается `latest forecast` для одной даты при нескольких `horizon/model/source`.
 
 3. Auth и доступ
 - Вынести auth surface в понятную deployment-схему для split services: отдельный auth/gateway endpoint или общий edge-service.
-- Реализовать RBAC вместо одного поля `role`: минимум `admin`, `analyst`, `viewer` с реальными проверками на endpoint-уровне.
-- Определить, какие операции доступны только `admin`: backfill координат, fetch/backfill прогнозов, просмотр service coverage, logout other sessions.
-- Добавить smoke-тесты на роли и отказ в доступе.
 
 4. Observability
 - Добавить OpenTelemetry tracing для HTTP, PostgreSQL, Redis и Kafka.
 - Добавить нормальные latency-метрики с buckets/histograms, а не только sums/counts.
-- Описать и/или реализовать alert rules:
-  - backlog/outbox растет;
-  - ingest остановился;
-  - БД недоступна;
-  - массово падает загрузка прогноза;
-  - слишком много failed/partial_failed forecast runs.
+- Описать и/или реализовать alert rules для роста backlog/outbox.
+- Описать и/или реализовать alert rules для остановки ingest.
+- Описать и/или реализовать alert rules для недоступности БД.
+- Описать и/или реализовать alert rules для массовых ошибок загрузки прогноза.
+- Описать и/или реализовать alert rules для большого числа `failed` / `partial_failed` forecast runs.
 - Подготовить минимальный dashboard: request rate, error rate, p95 latency, forecast backlog, telemetry backlog, outbox lag.
 
 P1. Развертка в Yandex Cloud
@@ -46,24 +50,22 @@ P1. Развертка в Yandex Cloud
 - Зафиксировать versioning/tagging strategy: immutable tags по commit sha и отдельный release tag.
 
 6. Kubernetes manifests для Yandex Cloud
-- Добавить манифесты для:
-  - `forecast-service`
-  - `telemetry-service`
-  - `analytics-api`
-  - `outbox-worker`
-  - при необходимости `migration-job`
+- Добавить манифесты для `forecast-service`.
+- Добавить манифесты для `telemetry-service`.
+- Добавить манифесты для `analytics-api`.
+- Добавить манифесты для `outbox-worker`.
+- При необходимости добавить манифесты для `migration-job`.
 - Для каждого сервиса подготовить `Deployment`, `Service`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler`.
 - Добавить `Ingress` или Yandex ALB ingress configuration для внешнего входа.
 - Добавить `PodDisruptionBudget`, requests/limits и probes.
 - Отдельно решить, где выполняются миграции: startup migration, отдельный Job или pre-deploy step.
 
 7. Инфраструктурные зависимости в Yandex Cloud
-- Зафиксировать целевую схему:
-  - Managed PostgreSQL;
-  - Managed Kubernetes;
-  - Container Registry;
-  - Object Storage;
-  - Managed Redis и/или Managed Kafka либо self-hosted transport внутри кластера.
+- Зафиксировать целевую схему с `Managed PostgreSQL`.
+- Зафиксировать целевую схему с `Managed Kubernetes`.
+- Зафиксировать целевую схему с `Container Registry`.
+- Зафиксировать целевую схему с `Object Storage`.
+- Зафиксировать целевую схему с `Managed Redis` и/или `Managed Kafka` либо self-hosted transport внутри кластера.
 - Описать хранение секретов: `DATABASE_URL`, CA certificate, Redis/Kafka credentials, auth settings.
 - Подготовить схему сетевого доступа: security groups, internal/external services, egress в Open-Meteo и NOAA.
 - Решить судьбу локального spool в Kubernetes: `emptyDir`, PVC или отключение spool при другой delivery strategy.
@@ -71,11 +73,10 @@ P1. Развертка в Yandex Cloud
 8. Эксплуатация и rollout
 - Описать пошаговый deploy в Yandex Cloud: bootstrap infra, apply manifests, migrate DB, smoke checks, rollback.
 - Описать, как одновременно живут две версии приложения при обновлении schema и worker logic.
-- Добавить post-deploy проверки:
-  - `/ready` и `/metrics` на всех сервисах;
-  - запись телеметрии;
-  - запуск загрузки прогноза;
-  - доставка одного outbox-сообщения до Redis/Kafka.
+- Добавить post-deploy проверку `/ready` и `/metrics` на всех сервисах.
+- Добавить post-deploy проверку записи телеметрии.
+- Добавить post-deploy проверку запуска загрузки прогноза.
+- Добавить post-deploy проверку доставки одного outbox-сообщения до Redis/Kafka.
 - Подготовить runbook на инциденты: failed migrations, broken outbox, lagging worker, expired certs, broken DB connectivity.
 
 P2. Хранение и данные вне OLTP

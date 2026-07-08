@@ -11,6 +11,7 @@
 - `analytics-api` для чтения агрегатов и аналитических представлений;
 - PostgreSQL как основной operational store;
 - `users` и `auth_sessions` в той же PostgreSQL для базового auth;
+- RBAC-роли `admin`, `analyst`, `viewer`;
 - staging/raw слои внутри PostgreSQL с последующим переходом к отдельному DWH;
 - dev-запуск через `docker-compose`;
 - probes `live` / `ready` / `health`.
@@ -75,6 +76,7 @@
 - `GET /api/analytics/worst-stations`
 - `GET /api/analytics/station-series`
 - `GET /api/analytics/coverage`
+- `GET /api/analytics/forecast-coverage`
 - `GET /live`
 - `GET /ready`
 - `GET /health`
@@ -135,6 +137,23 @@
 - перенести аналитику на отдельные `dm_*` представления.
 - добавить OpenTelemetry tracing;
 - подготовить Kubernetes manifests для Yandex Cloud.
+
+Historical backfill и safe rerun policy описаны в [backfill_runbook.md](/C:/Users/Дарья/Documents/programming_projects/lshpi/bugatye_lydi/docs/backfill_runbook.md).
+
+## Auth And Access
+
+Текущая auth-схема для split services:
+
+- `forecast-service`, `telemetry-service` и `analytics-api` используют один и тот же bearer token format;
+- каждая HTTP-нода валидирует токен напрямую по общим таблицам `users` и `auth_sessions` в PostgreSQL;
+- отдельного auth gateway сейчас нет, это остается отдельным deployment-решением;
+- legacy-роль `user` нормализуется в `viewer`.
+
+Текущая role matrix:
+
+- `viewer`: `GET /api/stations`, `GET /api/stations/{station_id}/details`, `GET /api/forecast-runs`, `GET /api/analytics/top-errors`, `GET /api/analytics/summary`, `GET /api/analytics/worst-stations`, `GET /api/analytics/station-series`, `GET /api/analytics/forecast-coverage`;
+- `analyst`: все права `viewer` плюс `POST /api/telemetry`;
+- `admin`: все права `analyst` плюс `POST /api/forecasts/fetch`, `POST /api/stations/backfill-coordinates`, `GET /api/analytics/coverage`, `POST /api/auth/users/{user_id}/logout-sessions`.
 
 ## Deployment Shape
 

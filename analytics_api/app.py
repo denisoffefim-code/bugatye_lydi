@@ -2,6 +2,7 @@
 
 from skycast.main import (
     analytics_coverage,
+    forecast_coverage,
     analytics_summary,
     list_forecast_runs,
     list_stations,
@@ -22,3 +23,4 @@ app.add_api_route("/api/analytics/summary", analytics_summary, methods=["GET"])
 app.add_api_route("/api/analytics/worst-stations", worst_stations, methods=["GET"])
 app.add_api_route("/api/analytics/station-series", station_series, methods=["GET"])
 app.add_api_route("/api/analytics/coverage", analytics_coverage, methods=["GET"])
+app.add_api_route("/api/analytics/forecast-coverage", forecast_coverage, methods=["GET"])

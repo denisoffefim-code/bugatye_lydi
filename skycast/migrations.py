@@ -397,6 +397,11 @@ async def _migration_create_users_and_auth(conn: asyncpg.Connection) -> None:
     )
 
 
+async def _migration_refresh_user_roles_for_rbac(conn: asyncpg.Connection) -> None:
+    await conn.execute("UPDATE users SET role = 'viewer' WHERE role = 'user'")
+    await conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'viewer'")
+
+
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply all pending migrations."""
     async with pool.acquire() as conn:
@@ -418,6 +423,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                 _migration_refresh_dm_forecast_errors_source_model_aware,
             ),
             ("skycast_create_users_and_auth", _migration_create_users_and_auth),
+            ("skycast_refresh_user_roles_for_rbac", _migration_refresh_user_roles_for_rbac),
         ]
 
         for name, fn in migrations:

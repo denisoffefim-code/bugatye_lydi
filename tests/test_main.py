@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from skycast.main import (
     _determine_forecast_run_status,
+    forecast_coverage,
     list_forecast_runs,
     list_stations,
     station_series,
@@ -167,3 +168,39 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
             args,
             (1, date(2026, 7, 1), date(2026, 7, 2), "best_match", "previous_runs", 2),
         )
+
+    async def test_forecast_coverage_applies_date_source_model_and_horizon_filters(self) -> None:
+        conn = _RecordingConnection(
+            fetch_results=[[{"model": "best_match", "source": "previous_runs", "horizon_days": 3, "forecast_rows": 42}]]
+        )
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await forecast_coverage(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 31),
+                model="best_match",
+                source="previous_runs",
+                horizon_days=3,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertIn("fv.forecast_date >= $1", query)
+        self.assertIn("fv.forecast_date <= $2", query)
+        self.assertIn("fr.model = $3", query)
+        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') = $4", query)
+        self.assertIn("fv.horizon_days = $5", query)
+        self.assertEqual(
+            args,
+            (date(2026, 7, 1), date(2026, 7, 31), "best_match", "previous_runs", 3),
+        )
+
+    async def test_forecast_coverage_rejects_reversed_date_range(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            await forecast_coverage(
+                start_date=date(2026, 7, 10),
+                end_date=date(2026, 7, 1),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("end_date must be greater than or equal to start_date", ctx.exception.detail)

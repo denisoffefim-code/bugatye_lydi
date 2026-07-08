@@ -128,6 +128,10 @@ METRIC_SQL_MAP = {
     "precipitation": ("fv.precipitation", "wd.precipitation"),
 }
 FORECAST_SOURCE_SQL = "COALESCE(fr.request_payload->>'source', 'forecast')"
+ROLE_VIEWER = "viewer"
+ROLE_ANALYST = "analyst"
+ROLE_ADMIN = "admin"
+LEGACY_ROLE_ALIASES = {"user": ROLE_VIEWER}
 
 
 def _auth_required_exception() -> HTTPException:
@@ -144,6 +148,25 @@ def _invalid_credentials_exception() -> HTTPException:
         detail="Invalid email or password",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def _forbidden_role_exception(allowed_roles: tuple[str, ...], actual_role: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail=f"Role '{actual_role}' is not allowed; required one of: {', '.join(allowed_roles)}",
+    )
+
+
+def _normalize_user_role(role: str | None) -> str:
+    normalized = (role or ROLE_VIEWER).strip().lower()
+    return LEGACY_ROLE_ALIASES.get(normalized, normalized)
+
+
+def _require_roles(current_auth: dict[str, Any], *allowed_roles: str) -> dict[str, Any]:
+    actual_role = _normalize_user_role(current_auth["user"].role)
+    if actual_role not in allowed_roles:
+        raise _forbidden_role_exception(tuple(allowed_roles), actual_role)
+    return current_auth
 
 
 def _append_sql_filter(clauses: list[str], args: list[Any], expression: str, value: Any) -> None:
@@ -210,7 +233,7 @@ def _user_out_from_row(row: Any) -> UserOut:
         id=row["id"],
         email=row["email"],
         full_name=row["full_name"],
-        role=row["role"],
+        role=_normalize_user_role(row["role"]),
         is_active=row["is_active"],
         created_at=row["created_at"],
         last_login_at=row["last_login_at"],
@@ -267,6 +290,24 @@ async def get_current_auth_context(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     return await _resolve_auth_context(request, authorization)
+
+
+async def get_current_viewer_auth_context(
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
+    return _require_roles(current_auth, ROLE_VIEWER, ROLE_ANALYST, ROLE_ADMIN)
+
+
+async def get_current_analyst_auth_context(
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
+    return _require_roles(current_auth, ROLE_ANALYST, ROLE_ADMIN)
+
+
+async def get_current_admin_auth_context(
+    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+) -> dict[str, Any]:
+    return _require_roles(current_auth, ROLE_ADMIN)
 
 
 async def _fetch_stations_for_forecast(
@@ -537,14 +578,15 @@ async def register_user(payload: UserRegisterRequest) -> UserOut:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO users (email, full_name, password_hash)
-            VALUES ($1, $2, $3)
+            INSERT INTO users (email, full_name, password_hash, role)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (email) DO NOTHING
             RETURNING id, email, full_name, role, is_active, created_at, last_login_at
             """,
             email,
             full_name,
             hash_password(payload.password, iterations=settings.auth_password_hash_iterations),
+            ROLE_VIEWER,
         )
         if row is None:
             raise HTTPException(status_code=409, detail="User with this email already exists")
@@ -643,6 +685,44 @@ async def logout_user(current_auth: dict[str, Any] = Depends(get_current_auth_co
     )
 
 
+@app.post("/api/auth/users/{user_id}/logout-sessions", status_code=204)
+async def logout_user_sessions(
+    user_id: int,
+    exclude_current_session: bool = True,
+    current_auth: dict[str, Any] = Depends(get_current_admin_auth_context),
+) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT 1 FROM users WHERE id = $1", user_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"User with id={user_id} was not found")
+
+        clauses = ["user_id = $1", "revoked_at IS NULL"]
+        args: list[Any] = [user_id]
+        if exclude_current_session and user_id == current_auth["user"].id:
+            clauses.append(f"id <> ${len(args) + 1}")
+            args.append(current_auth["session_id"])
+
+        await conn.execute(
+            f"""
+            UPDATE auth_sessions
+            SET revoked_at = NOW()
+            WHERE {' AND '.join(clauses)}
+            """,
+            *args,
+        )
+
+    logger.info(
+        "user_sessions_revoked",
+        extra={
+            "event": "user_sessions_revoked",
+            "admin_user_id": current_auth["user"].id,
+            "target_user_id": user_id,
+            "exclude_current_session": exclude_current_session,
+        },
+    )
+
+
 @app.get("/api/auth/me", response_model=UserOut)
 async def auth_me(current_auth: dict[str, Any] = Depends(get_current_auth_context)) -> UserOut:
     return current_auth["user"]
@@ -706,6 +786,7 @@ async def list_stations(
     with_coordinates_only: bool = False,
     missing_coordinates_only: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if with_coordinates_only and missing_coordinates_only:
         raise HTTPException(
@@ -749,7 +830,10 @@ async def list_stations(
 
 
 @app.get("/api/stations/{station_id}/details")
-async def station_details(station_id: int) -> dict[str, Any]:
+async def station_details(
+    station_id: int,
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
+) -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         station = await conn.fetchrow(
@@ -785,7 +869,7 @@ async def station_details(station_id: int) -> dict[str, Any]:
 @app.post("/api/stations/backfill-coordinates")
 async def backfill_station_coordinates(
     request: CoordinateBackfillRequest,
-    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+    current_auth: dict[str, Any] = Depends(get_current_admin_auth_context),
 ) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=settings.request_timeout_seconds)
     pool = get_pool()
@@ -863,7 +947,7 @@ async def backfill_station_coordinates(
 @app.post("/api/telemetry")
 async def ingest_telemetry(
     records: list[TelemetryRecordIn],
-    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+    current_auth: dict[str, Any] = Depends(get_current_analyst_auth_context),
 ) -> dict[str, Any]:
     if not records:
         raise HTTPException(status_code=400, detail="At least one telemetry record is required")
@@ -966,7 +1050,7 @@ async def ingest_telemetry(
 @app.post("/api/forecasts/fetch")
 async def fetch_forecasts(
     request: ForecastFetchRequest,
-    current_auth: dict[str, Any] = Depends(get_current_auth_context),
+    current_auth: dict[str, Any] = Depends(get_current_admin_auth_context),
 ) -> dict[str, Any]:
     if request.end_date < request.start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1168,6 +1252,7 @@ async def list_forecast_runs(
     model: str | None = None,
     source: Literal["forecast", "previous_runs"] | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     clauses = []
     args: list[Any] = []
@@ -1232,6 +1317,7 @@ async def top_errors(
     model: str | None = None,
     source: Literal["forecast", "previous_runs"] | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1300,6 +1386,7 @@ async def analytics_summary(
     model: str | None = None,
     source: Literal["forecast", "previous_runs"] | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1379,6 +1466,7 @@ async def worst_stations(
     model: str | None = None,
     source: Literal["forecast", "previous_runs"] | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1436,6 +1524,7 @@ async def station_series(
     model: str | None = None,
     source: Literal["forecast", "previous_runs"] | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1545,7 +1634,9 @@ async def station_series(
 
 
 @app.get("/api/analytics/coverage")
-async def analytics_coverage() -> dict[str, Any]:
+async def analytics_coverage(
+    _: dict[str, Any] = Depends(get_current_admin_auth_context),
+) -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -1589,3 +1680,68 @@ async def analytics_coverage() -> dict[str, Any]:
             """
         )
     return dict(row)
+
+
+@app.get("/api/analytics/forecast-coverage")
+async def forecast_coverage(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
+    _: dict[str, Any] = Depends(get_current_viewer_auth_context),
+) -> dict[str, Any]:
+    if start_date is not None and end_date is not None and end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    clauses = ["fr.status IN ('success', 'partial_failed')"]
+    args: list[Any] = []
+    if start_date is not None:
+        clauses.append(f"fv.forecast_date >= ${len(args) + 1}")
+        args.append(start_date)
+    if end_date is not None:
+        clauses.append(f"fv.forecast_date <= ${len(args) + 1}")
+        args.append(end_date)
+    _append_station_series_filters(
+        clauses,
+        args,
+        model=model,
+        source=source,
+        horizon_days=horizon_days,
+    )
+
+    query = f"""
+        SELECT
+            fr.model,
+            {FORECAST_SOURCE_SQL} AS source,
+            fv.horizon_days,
+            COUNT(*) AS forecast_rows,
+            COUNT(DISTINCT fv.run_id) AS run_count,
+            COUNT(DISTINCT fv.station_id) AS station_count,
+            MIN(fv.forecast_date) AS forecast_start_date,
+            MAX(fv.forecast_date) AS forecast_end_date,
+            COUNT(*) FILTER (WHERE fv.avg_temp IS NOT NULL) AS avg_temp_rows,
+            COUNT(*) FILTER (WHERE fv.min_temp IS NOT NULL) AS min_temp_rows,
+            COUNT(*) FILTER (WHERE fv.max_temp IS NOT NULL) AS max_temp_rows,
+            COUNT(*) FILTER (WHERE fv.precipitation IS NOT NULL) AS precipitation_rows,
+            COUNT(*) FILTER (WHERE fv.max_wind_speed IS NOT NULL) AS max_wind_speed_rows
+        FROM forecast_values fv
+        JOIN forecast_runs fr ON fr.id = fv.run_id
+        WHERE {' AND '.join(clauses)}
+        GROUP BY fr.model, {FORECAST_SOURCE_SQL}, fv.horizon_days
+        ORDER BY fr.model, source, fv.horizon_days
+    """
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *args)
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "model": model,
+        "source": source,
+        "horizon_days": horizon_days,
+        "returned": len(rows),
+        "items": [dict(row) for row in rows],
+    }
