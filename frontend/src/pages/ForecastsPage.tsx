@@ -1,4 +1,15 @@
-import { BarChart3, CalendarDays, CloudSun, Eye, Layers3, LineChart as LineIcon, Search, SlidersHorizontal } from "lucide-react";
+import {
+  BarChart3,
+  CalendarDays,
+  CloudRain,
+  CloudSun,
+  Eye,
+  LineChart as LineIcon,
+  MapPin,
+  Search,
+  SlidersHorizontal,
+  ThermometerSun
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, formatApiError } from "../api/client";
@@ -6,15 +17,27 @@ import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../component
 import { MetricCard } from "../components/MetricCard";
 import { Modal } from "../components/Modal";
 import type { Metric, Station, StationSeriesItem, StationSeriesResponse } from "../types";
-import { chartNumberDomain, defaultRange, formatDate, formatDateTime, formatNumber, metricLabels, metricUnits } from "../utils";
+import { chartNumberDomain, defaultRange, formatDate, formatNumber, metricLabels, metricUnits } from "../utils";
 
 interface ForecastFilters {
   stationId: number | "";
   startDate: string;
   endDate: string;
   metric: Metric;
-  model: string;
-  horizon: number | "";
+  search: string;
+}
+
+interface ForecastDaySummary {
+  date: string;
+  forecastAvgTemp: number | null;
+  forecastMinTemp: number | null;
+  forecastMaxTemp: number | null;
+  forecastPrecipitation: number | null;
+  forecastMaxWindSpeed: number | null;
+  actualAvgTemp: number | null;
+  actualMinTemp: number | null;
+  actualMaxTemp: number | null;
+  actualPrecipitation: number | null;
 }
 
 const defaultFilters = (): ForecastFilters => {
@@ -24,8 +47,7 @@ const defaultFilters = (): ForecastFilters => {
     startDate: range.start,
     endDate: range.end,
     metric: "avg_temp",
-    model: "",
-    horizon: ""
+    search: ""
   };
 };
 
@@ -34,33 +56,72 @@ function hasForecastData(item: StationSeriesItem) {
     item.forecast_avg_temp !== null ||
     item.forecast_min_temp !== null ||
     item.forecast_max_temp !== null ||
-    item.forecast_precipitation !== null
+    item.forecast_precipitation !== null ||
+    item.forecast_max_wind_speed !== null
   );
 }
 
-function metricValues(item: StationSeriesItem, metric: Metric) {
+function average(values: Array<number | null | undefined>) {
+  const numericValues = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!numericValues.length) {
+    return null;
+  }
+  return numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length;
+}
+
+function dailyForecastRows(items: StationSeriesItem[]): ForecastDaySummary[] {
+  const grouped = new Map<string, StationSeriesItem[]>();
+
+  for (const item of items) {
+    if (!hasForecastData(item)) {
+      continue;
+    }
+    grouped.set(item.observation_date, [...(grouped.get(item.observation_date) || []), item]);
+  }
+
+  return Array.from(grouped.entries())
+    .sort((left, right) => new Date(right[0]).getTime() - new Date(left[0]).getTime())
+    .map(([date, rows]) => ({
+      date,
+      forecastAvgTemp: average(rows.map((item) => item.forecast_avg_temp)),
+      forecastMinTemp: average(rows.map((item) => item.forecast_min_temp)),
+      forecastMaxTemp: average(rows.map((item) => item.forecast_max_temp)),
+      forecastPrecipitation: average(rows.map((item) => item.forecast_precipitation)),
+      forecastMaxWindSpeed: average(rows.map((item) => item.forecast_max_wind_speed)),
+      actualAvgTemp: average(rows.map((item) => item.actual_avg_temp)),
+      actualMinTemp: average(rows.map((item) => item.actual_min_temp)),
+      actualMaxTemp: average(rows.map((item) => item.actual_max_temp)),
+      actualPrecipitation: average(rows.map((item) => item.actual_precipitation))
+    }));
+}
+
+function metricValues(item: ForecastDaySummary, metric: Metric) {
   if (metric === "min_temp") {
     return {
-      forecast: item.forecast_min_temp,
-      actual: item.actual_min_temp
+      forecast: item.forecastMinTemp,
+      actual: item.actualMinTemp
     };
   }
   if (metric === "max_temp") {
     return {
-      forecast: item.forecast_max_temp,
-      actual: item.actual_max_temp
+      forecast: item.forecastMaxTemp,
+      actual: item.actualMaxTemp
     };
   }
   if (metric === "precipitation") {
     return {
-      forecast: item.forecast_precipitation,
-      actual: item.actual_precipitation
+      forecast: item.forecastPrecipitation,
+      actual: item.actualPrecipitation
     };
   }
   return {
-    forecast: item.forecast_avg_temp,
-    actual: item.actual_avg_temp
+    forecast: item.forecastAvgTemp,
+    actual: item.actualAvgTemp
   };
+}
+
+function weatherValue(value: number | null | undefined, unit: string) {
+  return value === null || value === undefined ? "нет данных" : `${formatNumber(value, 1)} ${unit}`;
 }
 
 export function ForecastsPage() {
@@ -68,7 +129,7 @@ export function ForecastsPage() {
   const [filters, setFilters] = useState<ForecastFilters>(() => defaultFilters());
   const [activeFilters, setActiveFilters] = useState<ForecastFilters | null>(null);
   const [series, setSeries] = useState<StationSeriesResponse | null>(null);
-  const [selectedForecast, setSelectedForecast] = useState<StationSeriesItem | null>(null);
+  const [selectedForecast, setSelectedForecast] = useState<ForecastDaySummary | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [stationsLoading, setStationsLoading] = useState(true);
   const [analysisLoading, setAnalysisLoading] = useState(false);
@@ -131,9 +192,7 @@ export function ForecastsPage() {
       const response = await api.stationSeries({
         station_id: Number(query.stationId),
         start_date: query.startDate,
-        end_date: query.endDate,
-        model: query.model.trim() || undefined,
-        horizon_days: query.horizon || undefined
+        end_date: query.endDate
       });
       setSeries(response);
       setActiveFilters(query);
@@ -160,76 +219,43 @@ export function ForecastsPage() {
 
   const selectedMetric = activeFilters?.metric || filters.metric;
   const forecastRows = useMemo(
-    () =>
-      (series?.items || [])
-        .filter(hasForecastData)
-        .slice()
-        .sort((left, right) => {
-          const dateDiff = new Date(right.observation_date).getTime() - new Date(left.observation_date).getTime();
-          if (dateDiff !== 0) {
-            return dateDiff;
-          }
-          return new Date(right.run_at || 0).getTime() - new Date(left.run_at || 0).getTime();
-        }),
-    [series?.items]
+    () => {
+      const query = activeFilters?.search.trim().toLowerCase() || "";
+      return dailyForecastRows(series?.items || []).filter((item) => {
+        if (!query) {
+          return true;
+        }
+        const text = `${item.date} ${series?.station.name || ""} ${series?.station.wmo_index || ""}`.toLowerCase();
+        return text.includes(query);
+      });
+    },
+    [activeFilters?.search, series?.items, series?.station.name, series?.station.wmo_index]
   );
 
   const chartData = useMemo(() => {
-    const grouped = new Map<
-      string,
-      {
-        forecastValues: number[];
-        actualValues: number[];
-        variants: number;
-      }
-    >();
-
-    for (const item of forecastRows) {
-      const current = grouped.get(item.observation_date) || {
-        forecastValues: [],
-        actualValues: [],
-        variants: 0
-      };
-      const values = metricValues(item, selectedMetric);
-      if (typeof values.forecast === "number") {
-        current.forecastValues.push(values.forecast);
-      }
-      if (typeof values.actual === "number") {
-        current.actualValues.push(values.actual);
-      }
-      current.variants += 1;
-      grouped.set(item.observation_date, current);
-    }
-
-    return Array.from(grouped.entries())
-      .sort((left, right) => new Date(left[0]).getTime() - new Date(right[0]).getTime())
-      .map(([date, value]) => ({
-        date: formatDate(date),
-        forecast: value.forecastValues.length
-          ? value.forecastValues.reduce((sum, item) => sum + item, 0) / value.forecastValues.length
-          : null,
-        actual: value.actualValues.length ? value.actualValues.reduce((sum, item) => sum + item, 0) / value.actualValues.length : null,
-        variants: value.variants
-      }));
+    return forecastRows
+      .slice()
+      .sort((left, right) => new Date(left.date).getTime() - new Date(right.date).getTime())
+      .map((item) => {
+        const values = metricValues(item, selectedMetric);
+        return {
+          date: formatDate(item.date),
+          forecast: values.forecast,
+          actual: values.actual
+        };
+      });
   }, [forecastRows, selectedMetric]);
 
   const chartDomain = chartNumberDomain(chartData.flatMap((item) => [item.forecast, item.actual]));
   const forecastDays = chartData.filter((item) => item.forecast !== null).length;
-  const modelNames = Array.from(new Set(forecastRows.map((item) => item.model).filter((value): value is string => Boolean(value))));
-  const horizonValues = forecastRows.map((item) => item.horizon_days).filter((value): value is number => value !== null);
-  const averageHorizon = horizonValues.length ? horizonValues.reduce((sum, value) => sum + value, 0) / horizonValues.length : null;
-  const updateMoments = forecastRows.map((item) => item.run_at).filter((value): value is string => Boolean(value)).sort();
-  const latestUpdateValue = updateMoments[updateMoments.length - 1];
-  const dominantModelEntry =
-    Array.from(
-      forecastRows.reduce((accumulator, item) => {
-        if (item.model) {
-          accumulator.set(item.model, (accumulator.get(item.model) || 0) + 1);
-        }
-        return accumulator;
-      }, new Map<string, number>())
-    ).sort((left, right) => right[1] - left[1])[0] || null;
-  const availableHorizons = Array.from(new Set(horizonValues)).sort((left, right) => left - right);
+  const averageTemp = average(forecastRows.map((item) => item.forecastAvgTemp));
+  const rainyDays = forecastRows.filter((item) => Number(item.forecastPrecipitation || 0) > 0).length;
+  const maxWind = Math.max(
+    ...forecastRows
+      .map((item) => item.forecastMaxWindSpeed)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value)),
+    0
+  );
 
   return (
     <section className="pageStack">
@@ -237,7 +263,7 @@ export function ForecastsPage() {
         <div>
           <span>Прогнозы</span>
           <h1>Прогноз по станции</h1>
-          <p>Выберите станцию, период и метрику, чтобы посмотреть прогнозные значения по дням, моделям и горизонтам.</p>
+          <p>Выберите станцию и период, чтобы посмотреть прогноз погоды по дням.</p>
         </div>
       </div>
 
@@ -245,7 +271,7 @@ export function ForecastsPage() {
         className="analysisForm"
         onSubmit={(event) => {
           event.preventDefault();
-          void runAnalysis({ ...filters, model: filters.model.trim() });
+          void runAnalysis(filters);
         }}
       >
         <div className="filterPanel mainFilters">
@@ -296,22 +322,11 @@ export function ForecastsPage() {
         {showAdvanced ? (
           <div className="filterPanel advancedPanel">
             <label>
-              <span>Модель</span>
+              <span>Поиск внутри периода</span>
               <div className="inputShell">
                 <Search size={17} />
-                <input placeholder="Например, gfs_seamless" value={filters.model} onChange={(event) => updateFilter("model", event.target.value)} />
+                <input placeholder="Дата или часть названия станции" value={filters.search} onChange={(event) => updateFilter("search", event.target.value)} />
               </div>
-            </label>
-            <label>
-              <span>Горизонт</span>
-              <select value={filters.horizon} onChange={(event) => updateFilter("horizon", event.target.value ? Number(event.target.value) : "")}>
-                <option value="">Все</option>
-                {[1, 2, 3, 4, 5, 6, 7].map((value) => (
-                  <option key={value} value={value}>
-                    {value} дн.
-                  </option>
-                ))}
-              </select>
             </label>
           </div>
         ) : null}
@@ -329,31 +344,31 @@ export function ForecastsPage() {
         <>
           <div className="metricGrid">
             <MetricCard
-              icon={CloudSun}
-              label="Дней с прогнозом"
-              value={formatNumber(forecastDays)}
-              hint={series?.station.name || "станция не выбрана"}
+              icon={MapPin}
+              label="Станция"
+              value={series?.station.wmo_index || "не выбрано"}
+              hint={series?.station.name}
               tone="blue"
             />
             <MetricCard
-              icon={Layers3}
-              label="Моделей в выборке"
-              value={formatNumber(modelNames.length)}
-              hint={dominantModelEntry ? `чаще всего: ${dominantModelEntry[0]}` : "модель не выделяется"}
+              icon={CalendarDays}
+              label="Дней с прогнозом"
+              value={formatNumber(forecastDays)}
+              hint={activeFilters ? `${formatDate(activeFilters.startDate)} - ${formatDate(activeFilters.endDate)}` : "период не задан"}
               tone="green"
             />
             <MetricCard
-              icon={CalendarDays}
-              label="Средний горизонт"
-              value={averageHorizon === null ? "нет данных" : `${formatNumber(averageHorizon, 1)} дн.`}
-              hint={availableHorizons.length ? `варианты: ${availableHorizons.join(", ")} дн.` : "горизонты не определены"}
+              icon={ThermometerSun}
+              label="Средняя температура"
+              value={averageTemp === null ? "нет данных" : `${formatNumber(averageTemp, 1)} °C`}
+              hint="прогноз за период"
               tone="amber"
             />
             <MetricCard
-              icon={LineIcon}
-              label="Последнее обновление"
-              value={latestUpdateValue ? formatDate(latestUpdateValue) : "нет данных"}
-              hint={latestUpdateValue ? formatDateTime(latestUpdateValue) : "дата обновления не найдена"}
+              icon={CloudRain}
+              label="Дней с осадками"
+              value={formatNumber(rainyDays)}
+              hint={maxWind > 0 ? `ветер до ${formatNumber(maxWind, 1)} м/с` : "ветер не выделяется"}
               tone="coral"
             />
           </div>
@@ -378,12 +393,12 @@ export function ForecastsPage() {
                 <strong>{metricLabels[selectedMetric]}</strong>
               </div>
               <div>
-                <span>Основная модель</span>
-                <strong>{dominantModelEntry ? `${dominantModelEntry[0]} · ${formatNumber(dominantModelEntry[1])} знач.` : "нет данных"}</strong>
+                <span>Тип данных</span>
+                <strong>прогноз погоды</strong>
               </div>
               <div>
-                <span>Горизонты в выборке</span>
-                <strong>{availableHorizons.length ? `${availableHorizons.join(", ")} дн.` : "нет данных"}</strong>
+                <span>Дней в таблице</span>
+                <strong>{formatNumber(forecastRows.length)}</strong>
               </div>
             </div>
           </article>
@@ -392,7 +407,7 @@ export function ForecastsPage() {
             <div className="panelHeader">
               <div>
                 <span>Динамика</span>
-                <h2>Средний прогноз по дням</h2>
+                <h2>Прогноз по дням</h2>
               </div>
               <BarChart3 size={20} />
             </div>
@@ -428,8 +443,8 @@ export function ForecastsPage() {
           <article className="panel">
             <div className="panelHeader">
               <div>
-                <span>По строкам</span>
-                <h2>Прогнозные значения</h2>
+                <span>Список</span>
+                <h2>Прогноз погоды</h2>
               </div>
             </div>
             {analysisLoading ? <LoadingPanel /> : null}
@@ -439,27 +454,23 @@ export function ForecastsPage() {
                   <thead>
                     <tr>
                       <th>Дата</th>
-                      <th>Модель</th>
-                      <th>Горизонт</th>
                       <th>Средняя</th>
                       <th>Мин.</th>
                       <th>Макс.</th>
                       <th>Осадки</th>
-                        <th>Обновлен</th>
+                      <th>Ветер</th>
                       <th>Детали</th>
                     </tr>
                   </thead>
                   <tbody>
                     {forecastRows.map((item, index) => (
-                      <tr key={`${item.observation_date}-${item.model || "model"}-${item.horizon_days || "h"}-${index}`}>
-                        <td>{formatDate(item.observation_date)}</td>
-                        <td>{item.model || "нет данных"}</td>
-                        <td>{item.horizon_days === null ? "нет данных" : `${item.horizon_days} дн.`}</td>
-                        <td>{item.forecast_avg_temp === null ? "нет данных" : `${formatNumber(item.forecast_avg_temp, 1)} °C`}</td>
-                        <td>{item.forecast_min_temp === null ? "нет данных" : `${formatNumber(item.forecast_min_temp, 1)} °C`}</td>
-                        <td>{item.forecast_max_temp === null ? "нет данных" : `${formatNumber(item.forecast_max_temp, 1)} °C`}</td>
-                        <td>{item.forecast_precipitation === null ? "нет данных" : `${formatNumber(item.forecast_precipitation, 1)} мм`}</td>
-                        <td>{formatDateTime(item.run_at)}</td>
+                      <tr key={`${item.date}-${index}`}>
+                        <td>{formatDate(item.date)}</td>
+                        <td>{weatherValue(item.forecastAvgTemp, "°C")}</td>
+                        <td>{weatherValue(item.forecastMinTemp, "°C")}</td>
+                        <td>{weatherValue(item.forecastMaxTemp, "°C")}</td>
+                        <td>{weatherValue(item.forecastPrecipitation, "мм")}</td>
+                        <td>{weatherValue(item.forecastMaxWindSpeed, "м/с")}</td>
                         <td>
                           <button className="iconButton" type="button" onClick={() => setSelectedForecast(item)} aria-label="Открыть детали">
                             <Eye size={17} />
@@ -484,41 +495,31 @@ export function ForecastsPage() {
           <div className="detailGrid">
             <div>
               <span>Дата</span>
-              <strong>{formatDate(selectedForecast.observation_date)}</strong>
+              <strong>{formatDate(selectedForecast.date)}</strong>
             </div>
             <div>
               <span>Станция</span>
               <strong>{series?.station.name || "нет данных"}</strong>
             </div>
             <div>
-              <span>Модель</span>
-              <strong>{selectedForecast.model || "нет данных"}</strong>
-            </div>
-            <div>
-              <span>Горизонт</span>
-              <strong>{selectedForecast.horizon_days === null ? "нет данных" : `${selectedForecast.horizon_days} дн.`}</strong>
-            </div>
-            <div>
-              <span>Обновлен</span>
-              <strong>{formatDateTime(selectedForecast.run_at)}</strong>
-            </div>
-            <div>
               <span>Средняя температура</span>
-              <strong>{selectedForecast.forecast_avg_temp === null ? "нет данных" : `${formatNumber(selectedForecast.forecast_avg_temp, 1)} °C`}</strong>
+              <strong>{weatherValue(selectedForecast.forecastAvgTemp, "°C")}</strong>
             </div>
             <div>
               <span>Минимальная температура</span>
-              <strong>{selectedForecast.forecast_min_temp === null ? "нет данных" : `${formatNumber(selectedForecast.forecast_min_temp, 1)} °C`}</strong>
+              <strong>{weatherValue(selectedForecast.forecastMinTemp, "°C")}</strong>
             </div>
             <div>
               <span>Максимальная температура</span>
-              <strong>{selectedForecast.forecast_max_temp === null ? "нет данных" : `${formatNumber(selectedForecast.forecast_max_temp, 1)} °C`}</strong>
+              <strong>{weatherValue(selectedForecast.forecastMaxTemp, "°C")}</strong>
             </div>
             <div>
               <span>Осадки</span>
-              <strong>
-                {selectedForecast.forecast_precipitation === null ? "нет данных" : `${formatNumber(selectedForecast.forecast_precipitation, 1)} мм`}
-              </strong>
+              <strong>{weatherValue(selectedForecast.forecastPrecipitation, "мм")}</strong>
+            </div>
+            <div>
+              <span>Ветер</span>
+              <strong>{weatherValue(selectedForecast.forecastMaxWindSpeed, "м/с")}</strong>
             </div>
           </div>
         ) : null}

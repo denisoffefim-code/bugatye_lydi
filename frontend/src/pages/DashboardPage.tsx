@@ -1,8 +1,8 @@
 import {
   BarChart3,
   CalendarClock,
+  CloudSun,
   Gauge,
-  Layers3,
   MapPin,
   ThermometerSun,
   UserRound
@@ -13,7 +13,7 @@ import { api, formatApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, ErrorState, SkeletonGrid } from "../components/DataState";
 import { MetricCard } from "../components/MetricCard";
-import type { AnalyticsSummaryResponse, ForecastCoverageResponse, Metric, StationsResponse } from "../types";
+import type { AnalyticsSummaryResponse, Metric, StationsResponse } from "../types";
 import {
   biasSummary,
   defaultRange,
@@ -28,7 +28,6 @@ import {
 interface DashboardData {
   summary: AnalyticsSummaryResponse | null;
   stations: StationsResponse | null;
-  coverage: ForecastCoverageResponse | null;
 }
 
 const metricOrder: Metric[] = ["avg_temp", "min_temp", "max_temp", "precipitation"];
@@ -37,8 +36,7 @@ export function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData>({
     summary: null,
-    stations: null,
-    coverage: null
+    stations: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,10 +50,9 @@ export function DashboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const [summary, stations, coverage] = await Promise.all([
+        const [summary, stations] = await Promise.all([
           api.summary({ start_date: range.start, end_date: range.end, only_with_coordinates: true }),
-          api.stations({ limit: 500 }),
-          api.forecastCoverage({ start_date: range.start, end_date: range.end })
+          api.stations({ limit: 500 })
         ]);
 
         if (!active) {
@@ -64,8 +61,7 @@ export function DashboardPage() {
 
         setData({
           summary,
-          stations,
-          coverage
+          stations
         });
       } catch (err) {
         if (active) {
@@ -84,13 +80,11 @@ export function DashboardPage() {
     };
   }, [range.end, range.start]);
 
-  const coverageItems = data.coverage?.items || [];
   const totalComparedPoints = metricOrder.reduce(
     (sum, metric) => sum + Number(data.summary?.metrics[metric]?.compared_points || 0),
     0
   );
-  const modelCount = new Set(coverageItems.map((item) => item.model)).size;
-  const horizons = Array.from(new Set(coverageItems.map((item) => item.horizon_days))).sort((left, right) => left - right);
+  const activeMetricCount = metricOrder.filter((metric) => Number(data.summary?.metrics[metric]?.compared_points || 0) > 0).length;
   const avgTempMetric = data.summary?.metrics.avg_temp || null;
   const riskiestMetric =
     metricOrder
@@ -145,10 +139,10 @@ export function DashboardPage() {
               tone="amber"
             />
             <MetricCard
-              icon={Layers3}
-              label="Моделей прогноза"
-              value={formatNumber(modelCount)}
-              hint={horizons.length ? `горизонты: ${horizons.join(", ")} дн.` : "горизонты пока не определены"}
+              icon={CloudSun}
+              label="Погодных метрик"
+              value={formatNumber(activeMetricCount)}
+              hint="температура и осадки"
               tone="coral"
             />
           </div>
@@ -235,9 +229,9 @@ export function DashboardPage() {
               <span>Посмотрите ежедневный факт, прогноз и ошибку без ручного сопоставления строк.</span>
             </Link>
             <Link className="quickTile" to="/app/forecasts">
-              <Layers3 size={22} />
+              <CloudSun size={22} />
               <strong>Прогнозы по станции</strong>
-              <span>Посмотрите прогнозные значения, модели и горизонты за выбранный период.</span>
+              <span>Посмотрите прогнозные значения за выбранный период.</span>
             </Link>
           </div>
 

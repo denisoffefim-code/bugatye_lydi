@@ -6,7 +6,6 @@ import { EmptyState, ErrorState, SkeletonGrid } from "../components/DataState";
 import { MetricCard } from "../components/MetricCard";
 import type {
   AnalyticsSummaryResponse,
-  ForecastCoverageResponse,
   Metric,
   Station,
   StationSeriesResponse,
@@ -34,6 +33,8 @@ interface AnalysisFilters {
   horizon: number | "";
 }
 
+const metricOrder: Metric[] = ["avg_temp", "min_temp", "max_temp", "precipitation"];
+
 const defaultFilters = (): AnalysisFilters => {
   const range = defaultRange(14);
   return {
@@ -53,7 +54,6 @@ export function AnalyticsPage() {
   const [summary, setSummary] = useState<AnalyticsSummaryResponse | null>(null);
   const [topErrors, setTopErrors] = useState<TopErrorsResponse | null>(null);
   const [worstStations, setWorstStations] = useState<WorstStationsResponse | null>(null);
-  const [coverage, setCoverage] = useState<ForecastCoverageResponse | null>(null);
   const [series, setSeries] = useState<StationSeriesResponse | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -89,10 +89,7 @@ export function AnalyticsPage() {
   const seriesAverageError = averageAbsoluteError(dailySeries);
   const biggestMiss = topErrors?.items[0] || null;
   const weakestStation = worstStations?.items[0] || null;
-  const fullestDataset =
-    coverage?.items.slice().sort((left, right) => Number(right.forecast_rows) - Number(left.forecast_rows))[0] || null;
-  const modelCount = new Set((coverage?.items || []).map((item) => item.model)).size;
-  const horizons = Array.from(new Set((coverage?.items || []).map((item) => item.horizon_days))).sort((left, right) => left - right);
+  const activeMetricCount = metricOrder.filter((metric) => Number(summary?.metrics[metric]?.compared_points || 0) > 0).length;
 
   const errorChartData = (topErrors?.items || []).slice(0, 8).map((item) => ({
     name: item.name.length > 14 ? `${item.name.slice(0, 14)}...` : item.name,
@@ -129,8 +126,7 @@ export function AnalyticsPage() {
 
     try {
       const primaryResults = await Promise.allSettled([
-        api.summary({ ...baseParams, only_with_coordinates: true }),
-        api.forecastCoverage(baseParams)
+        api.summary({ ...baseParams, only_with_coordinates: true })
       ]);
       const secondaryResults = await Promise.allSettled([
         api.topErrors({ ...baseParams, metric: query.metric, limit: 12, only_with_coordinates: true }),
@@ -152,14 +148,6 @@ export function AnalyticsPage() {
       } else {
         setSummary(null);
         nextWarnings.push(`Сводка периода недоступна: ${formatApiError(primaryResults[0].reason)}`);
-      }
-
-      if (primaryResults[1].status === "fulfilled") {
-        setCoverage(primaryResults[1].value);
-        successCount += 1;
-      } else {
-        setCoverage(null);
-        nextWarnings.push(`Сводка по вариантам прогноза недоступна: ${formatApiError(primaryResults[1].reason)}`);
       }
 
       if (secondaryResults[0].status === "fulfilled") {
@@ -210,7 +198,6 @@ export function AnalyticsPage() {
     setSummary(null);
     setTopErrors(null);
     setWorstStations(null);
-    setCoverage(null);
     setSeries(null);
     setError(null);
     setWarnings([]);
@@ -345,9 +332,9 @@ export function AnalyticsPage() {
             />
             <MetricCard
               icon={Radar}
-              label="Вариантов прогноза"
-              value={formatNumber(coverage?.returned ?? 0)}
-              hint={fullestDataset ? `${fullestDataset.model}, ${fullestDataset.horizon_days} дн.` : "варианты не выделяются"}
+              label="Погодных метрик"
+              value={formatNumber(activeMetricCount)}
+              hint="температура, осадки и сравнения"
               tone="coral"
             />
           </div>
@@ -378,22 +365,16 @@ export function AnalyticsPage() {
                 <strong>{weakestStation ? `${weakestStation.name} · ${formatNumber(weakestStation.compared_points)} сравн.` : "нет данных"}</strong>
               </div>
               <div>
-                <span>Основной набор прогноза</span>
-                <strong>
-                  {fullestDataset
-                    ? `${fullestDataset.model}, ${fullestDataset.horizon_days} дн., ${formatNumber(fullestDataset.station_count)} станций`
-                    : "нет данных"}
-                </strong>
+                <span>Период анализа</span>
+                <strong>{activeFilters ? `${formatDate(activeFilters.startDate)} - ${formatDate(activeFilters.endDate)}` : "нет данных"}</strong>
               </div>
               <div>
                 <span>Системное смещение</span>
                 <strong>{biasSummary(metricSummary?.bias, selectedMetric)}</strong>
               </div>
               <div>
-                <span>Моделей и горизонтов</span>
-                <strong>
-                  {formatNumber(modelCount)} моделей · {horizons.length ? horizons.join(", ") : "нет"} дн.
-                </strong>
+                <span>Активная метрика</span>
+                <strong>{metricLabels[selectedMetric]}</strong>
               </div>
             </div>
           </article>
@@ -506,81 +487,40 @@ export function AnalyticsPage() {
             )}
           </article>
 
-          <div className="dashboardGrid">
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Станции</span>
-                  <h2>Где средняя ошибка выше всего</h2>
-                </div>
+          <article className="panel">
+            <div className="panelHeader">
+              <div>
+                <span>Станции</span>
+                <h2>Где средняя ошибка выше всего</h2>
               </div>
-              {worstStations?.items.length ? (
-                <div className="tableScroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Станция</th>
-                        <th>Сравнений</th>
-                        <th>MAE</th>
-                        <th>Макс. ошибка</th>
+            </div>
+            {worstStations?.items.length ? (
+              <div className="tableScroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Станция</th>
+                      <th>Сравнений</th>
+                      <th>MAE</th>
+                      <th>Макс. ошибка</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {worstStations.items.map((item) => (
+                      <tr key={item.station_id}>
+                        <td>{item.name}</td>
+                        <td>{formatNumber(item.compared_points)}</td>
+                        <td>{formatNumber(item.mae, 1)}</td>
+                        <td>{formatNumber(item.max_absolute_error, 1)}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {worstStations.items.map((item) => (
-                        <tr key={item.station_id}>
-                          <td>{item.name}</td>
-                          <td>{formatNumber(item.compared_points)}</td>
-                          <td>{formatNumber(item.mae, 1)}</td>
-                          <td>{formatNumber(item.max_absolute_error, 1)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <EmptyState title="Станции не найдены" text="Нет агрегированных ошибок по станциям за этот период." />
-              )}
-            </article>
-
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Варианты</span>
-                  <h2>Какие сценарии участвуют в разборе</h2>
-                </div>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              {coverage?.items.length ? (
-                <div className="tableScroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Модель</th>
-                        <th>Горизонт</th>
-                        <th>Строк</th>
-                        <th>Станций</th>
-                        <th>Период</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {coverage.items.map((item) => (
-                        <tr key={`${item.model}-${item.horizon_days}`}>
-                          <td>{item.model}</td>
-                          <td>{item.horizon_days} дн.</td>
-                          <td>{formatNumber(item.forecast_rows)}</td>
-                          <td>{formatNumber(item.station_count)}</td>
-                          <td>
-                            {formatDate(item.forecast_start_date)} - {formatDate(item.forecast_end_date)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <EmptyState title="Варианты не найдены" text="Для выбранного периода сервис не вернул вариантов прогноза для анализа." />
-              )}
-            </article>
-          </div>
+            ) : (
+              <EmptyState title="Станции не найдены" text="Нет агрегированных ошибок по станциям за этот период." />
+            )}
+          </article>
         </>
       ) : null}
     </section>

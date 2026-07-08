@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: transport-observer
-          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-230138-fullstack
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:git-735258c-20260709-003201
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "skycast.transport_observer"]
           envFrom:
