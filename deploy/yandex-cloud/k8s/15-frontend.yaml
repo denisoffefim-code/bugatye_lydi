@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: skycast-frontend
-          image: cr.yandex/crp0uld88a95dqoql4bj/skycast-frontend:git-735258c-20260709-003201
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast-frontend:git-735258c-ui-20260709-012713
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
