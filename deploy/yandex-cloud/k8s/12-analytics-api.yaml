@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-api
+  namespace: skycast
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: analytics-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: analytics-api
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: analytics-api
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-150043
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: APP_MODULE
+              value: skycast.main:app
+            - name: APP_PORT
+              value: "8080"
+          envFrom:
+            - configMapRef:
+                name: skycast-shared-config
+            - secretRef:
+                name: skycast-runtime-secrets
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
+          volumeMounts:
+            - name: yandex-ca
+              mountPath: /etc/ssl/certs/yandex-cloud
+              readOnly: true
+      volumes:
+        - name: yandex-ca
+          secret:
+            secretName: skycast-yandex-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-api
+  namespace: skycast
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: analytics-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

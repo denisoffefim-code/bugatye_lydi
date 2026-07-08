@@ -1,17 +1,42 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: skycast
+      POSTGRES_USER: skycast
+      POSTGRES_PASSWORD: skycast
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skycast -d skycast"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.7.0
+    restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
     image: confluentinc/cp-kafka:7.7.0
+    restart: unless-stopped
     depends_on:
       - zookeeper
     ports:
@@ -19,60 +44,123 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "cub kafka-ready -b localhost:9092 1 20"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   forecast-service:
     build: .
+    restart: unless-stopped
     env_file:
-      - .env
+      - ./deploy/docker/local.env
     environment:
       APP_MODULE: forecast_service.app:app
       APP_PORT: 8081
     ports:
       - "8081:8081"
     depends_on:
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/live', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
   telemetry-service:
     build: .
+    restart: unless-stopped
     env_file:
-      - .env
+      - ./deploy/docker/local.env
     environment:
       APP_MODULE: telemetry_service.app:app
       APP_PORT: 8082
     ports:
       - "8082:8082"
     depends_on:
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/live', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
   analytics-api:
     build: .
+    restart: unless-stopped
     env_file:
-      - .env
+      - ./deploy/docker/local.env
     environment:
       APP_MODULE: analytics_api.app:app
       APP_PORT: 8083
     ports:
       - "8083:8083"
     depends_on:
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/live', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
   outbox-worker:
     build: .
+    restart: unless-stopped
     env_file:
-      - .env
-    environment:
-      OUTBOX_SPOOL_DIR: /var/lib/skycast/outbox-spool
+      - ./deploy/docker/local.env
     command: ["python", "-m", "skycast.outbox_worker"]
     depends_on:
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     volumes:
       - outbox-spool:/var/lib/skycast/outbox-spool
 
 volumes:
+  postgres-data:
   outbox-spool:

@@ -32,7 +32,7 @@ python data_loaders/load_open_meteo_backfill.py \
 
 - Повторный запуск безопасен: каждый rerun создает новый `forecast_runs.id`.
 - Данные одного run идемпотентны внутри себя за счет `UNIQUE (run_id, station_id, forecast_date)` в `forecast_values`.
-- Аналитика выбирает latest forecast внутри ключа `station_id + forecast_date + horizon_days + provider + model + source`.
+- Аналитика выбирает latest forecast внутри ключа `station_id + forecast_date + horizon_days + provider + model`.
 - Основной порядок выбора: `run_at DESC`; tie-break: `forecast_runs.id DESC`, затем `forecast_values.id DESC`.
 - Старые historical runs сохраняются для аудита и сравнения, но не должны побеждать более новый rerun в аналитике.
 
@@ -47,13 +47,13 @@ python data_loaders/load_open_meteo_backfill.py \
 1. Проверить список запусков:
 
 ```text
-GET /api/forecast-runs?source=previous_runs&model=best_match
+GET /api/forecast-runs?model=best_match
 ```
 
 2. Проверить coverage по `model/source/horizon`:
 
 ```text
-GET /api/analytics/forecast-coverage?source=previous_runs&model=best_match
+GET /api/analytics/forecast-coverage?model=best_match
 ```
 
 3. Проверить общие totals и backlog:
@@ -65,7 +65,7 @@ GET /api/analytics/coverage
 4. Если нужен точечный контроль по станции:
 
 ```text
-GET /api/analytics/station-series?station_id=...&start_date=...&end_date=...&source=previous_runs&horizon_days=...
+GET /api/analytics/station-series?station_id=...&start_date=...&end_date=...&horizon_days=...
 ```
 
 ## What to record after completion

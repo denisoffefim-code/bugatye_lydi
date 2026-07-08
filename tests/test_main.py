@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from skycast.forecast_contract import latest_forecast_identity_sql, latest_forecast_order_by_sql
 from skycast.main import (
     _determine_forecast_run_status,
+    analytics_summary,
     forecast_coverage,
     list_forecast_runs,
     list_stations,
@@ -101,7 +102,7 @@ class StationFilterValidationTests(unittest.IsolatedAsyncioTestCase):
 
 class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
     async def test_list_forecast_runs_applies_source_model_and_horizon_filters(self) -> None:
-        conn = _RecordingConnection(fetch_results=[[{"id": 9, "source": "previous_runs"}]])
+        conn = _RecordingConnection(fetch_results=[[{"id": 9, "source": "forecast"}]])
 
         with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
             response = await list_forecast_runs(
@@ -114,9 +115,10 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["returned"], 1)
         query, args = conn.fetch_calls[0]
-        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') = $3", query)
-        self.assertIn("fv_filter.horizon_days = $4", query)
-        self.assertEqual(args, ("success", "best_match", "previous_runs", 3, 5))
+        self.assertNotIn(" AS source = ", query)
+        self.assertNotIn("COALESCE(fr.request_payload->>'source', 'forecast') =", query)
+        self.assertIn("fv_filter.horizon_days = $3", query)
+        self.assertEqual(args, ("success", "best_match", 3, 5))
 
     async def test_top_errors_applies_source_model_and_horizon_filters(self) -> None:
         conn = _RecordingConnection(fetch_results=[[]])
@@ -134,12 +136,62 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["returned"], 0)
         query, args = conn.fetch_calls[0]
-        self.assertIn("source = $5", query)
-        self.assertIn("horizon_days = $6", query)
+        self.assertNotIn("source =", query)
+        self.assertIn("horizon_days = $5", query)
+        self.assertEqual(response["source"], "forecast")
         self.assertEqual(
             args,
-            ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), "best_match", "previous_runs", 2, 20),
+            ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), "best_match", 2, 20),
         )
+
+    async def test_top_errors_defaults_blank_source_to_forecast(self) -> None:
+        conn = _RecordingConnection(fetch_results=[[]])
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await top_errors(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 10),
+                metric="avg_temp",
+                limit=20,
+                source="  ",
+                horizon_days=None,
+            )
+
+        self.assertEqual(response["source"], "forecast")
+        query, args = conn.fetch_calls[0]
+        self.assertNotIn("source =", query)
+        self.assertEqual(args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), 20))
+
+    async def test_analytics_summary_ignores_blank_model_filter(self) -> None:
+        conn = _RecordingConnection(
+            fetchrow_results=[
+                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
+                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
+                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
+                {"compared_points": 0, "mae": None, "rmse": None, "bias": None, "max_absolute_error": None},
+                {"stations_total": 0, "actual_rows": 0, "forecast_rows": 0, "atm8c_rows": 0, "srok8c_rows": 0},
+            ]
+        )
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await analytics_summary(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 10),
+                model="",
+                source="",
+                horizon_days=None,
+            )
+
+        self.assertIsNone(response["model"])
+        self.assertEqual(response["source"], "forecast")
+        metric_query, metric_args = conn.fetchrow_calls[0]
+        totals_query, totals_args = conn.fetchrow_calls[-1]
+        self.assertNotIn("model = ", metric_query)
+        self.assertNotIn("fr.model = ", totals_query)
+        self.assertNotIn("source =", metric_query)
+        self.assertNotIn("COALESCE(fr.request_payload->>'source', 'forecast') =", totals_query)
+        self.assertEqual(metric_args, ("avg_temp", date(2026, 7, 1), date(2026, 7, 10)))
+        self.assertEqual(totals_args, (date(2026, 7, 1), date(2026, 7, 10)))
 
     async def test_station_series_keeps_horizon_model_and_source_dimensions(self) -> None:
         conn = _RecordingConnection(
@@ -163,15 +215,16 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["returned"], 1)
         query, args = conn.fetch_calls[0]
         self.assertIn(f"DISTINCT ON ({latest_forecast_identity_sql()})", query)
-        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') AS source", query)
-        self.assertIn("fv.horizon_days = $6", query)
+        self.assertIn("'forecast' AS source", query)
+        self.assertIn("fv.horizon_days = $5", query)
         self.assertIn(f"ORDER BY {latest_forecast_order_by_sql()}", query)
         self.assertIn("fr.id DESC", query)
         self.assertIn("fv.id DESC", query)
         self.assertEqual(
             args,
-            (1, date(2026, 7, 1), date(2026, 7, 2), "best_match", "previous_runs", 2),
+            (1, date(2026, 7, 1), date(2026, 7, 2), "best_match", 2),
         )
+        self.assertEqual(response["source"], "forecast")
 
     async def test_forecast_coverage_applies_date_source_model_and_horizon_filters(self) -> None:
         conn = _RecordingConnection(
@@ -192,12 +245,32 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("fv.forecast_date >= $1", query)
         self.assertIn("fv.forecast_date <= $2", query)
         self.assertIn("fr.model = $3", query)
-        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') = $4", query)
-        self.assertIn("fv.horizon_days = $5", query)
+        self.assertNotIn("COALESCE(fr.request_payload->>'source', 'forecast') =", query)
+        self.assertIn("fv.horizon_days = $4", query)
         self.assertEqual(
             args,
-            (date(2026, 7, 1), date(2026, 7, 31), "best_match", "previous_runs", 3),
+            (date(2026, 7, 1), date(2026, 7, 31), "best_match", 3),
         )
+        self.assertEqual(response["source"], "forecast")
+
+    async def test_forecast_runs_ignores_blank_source_filter(self) -> None:
+        conn = _RecordingConnection(fetch_results=[[{"id": 9}]])
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await list_forecast_runs(
+                limit=5,
+                status="",
+                model=" ",
+                source="",
+                horizon_days=None,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertNotIn("fr.status =", query)
+        self.assertNotIn("fr.model =", query)
+        self.assertNotIn("COALESCE(fr.request_payload->>'source', 'forecast') =", query)
+        self.assertEqual(args, (5,))
 
     async def test_forecast_coverage_rejects_reversed_date_range(self) -> None:
         with self.assertRaises(HTTPException) as ctx:

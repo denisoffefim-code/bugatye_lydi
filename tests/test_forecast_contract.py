@@ -18,7 +18,7 @@ class _MigrationRecordingConnection:
 
 
 class LatestForecastContractTests(unittest.TestCase):
-    def test_identity_sql_tracks_station_date_horizon_provider_model_and_source(self) -> None:
+    def test_identity_sql_tracks_station_date_horizon_provider_and_model(self) -> None:
         identity_sql = latest_forecast_identity_sql()
 
         self.assertIn("fv.station_id", identity_sql)
@@ -26,7 +26,10 @@ class LatestForecastContractTests(unittest.TestCase):
         self.assertIn("fv.horizon_days", identity_sql)
         self.assertIn("fr.provider", identity_sql)
         self.assertIn("fr.model", identity_sql)
-        self.assertIn(FORECAST_SOURCE_SQL, identity_sql)
+        self.assertNotIn(FORECAST_SOURCE_SQL, identity_sql)
+
+    def test_public_source_sql_is_unified_forecast(self) -> None:
+        self.assertEqual(FORECAST_SOURCE_SQL, "'forecast'")
 
     def test_order_by_sql_uses_deterministic_tie_breakers(self) -> None:
         order_by_sql = latest_forecast_order_by_sql()
@@ -47,3 +50,4 @@ class ForecastErrorsViewContractTests(unittest.IsolatedAsyncioTestCase):
         create_view_sql = conn.execute_calls[1]
         self.assertIn(f"SELECT DISTINCT ON ({latest_forecast_identity_sql()})", create_view_sql)
         self.assertIn(f"ORDER BY {latest_forecast_order_by_sql()}", create_view_sql)
+        self.assertIn(f"{FORECAST_SOURCE_SQL} AS source", create_view_sql)

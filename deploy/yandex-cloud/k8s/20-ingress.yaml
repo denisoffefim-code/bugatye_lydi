@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: skycast
+  namespace: skycast
+  annotations:
+    gwin.yandex.cloud/groupName: skycast-public
+    gwin.yandex.cloud/externalIPv4Address: "auto"
+    gwin.yandex.cloud/albBalancerName: skycast-public
+    gwin.yandex.cloud/rules.backends.hc.http.path: /ready
+    gwin.yandex.cloud/rules.backends.hc.interval: 10s
+    gwin.yandex.cloud/rules.backends.hc.timeout: 5s
+    gwin.yandex.cloud/rules.backends.hc.healthyThreshold: "2"
+    gwin.yandex.cloud/rules.backends.hc.unhealthyThreshold: "3"
+spec:
+  ingressClassName: gwin-default
+  defaultBackend:
+    service:
+      name: analytics-api
+      port:
+        number: 80
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80

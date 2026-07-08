@@ -14,6 +14,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - helper tests may run without runtime deps
     asyncpg = Any  # type: ignore[assignment]
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from skycast.auth import (
@@ -125,6 +126,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_allowed_origins),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 METRIC_SQL_MAP = {
     "avg_temp": ("fv.avg_temp", "wd.avg_temp"),
@@ -136,6 +144,11 @@ ROLE_VIEWER = "viewer"
 ROLE_ANALYST = "analyst"
 ROLE_ADMIN = "admin"
 LEGACY_ROLE_ALIASES = {"user": ROLE_VIEWER}
+PUBLIC_FORECAST_SOURCE = "forecast"
+FORECAST_SOURCE_ALIASES = {
+    PUBLIC_FORECAST_SOURCE: PUBLIC_FORECAST_SOURCE,
+    "previous_runs": PUBLIC_FORECAST_SOURCE,
+}
 
 
 def _auth_required_exception() -> HTTPException:
@@ -180,18 +193,40 @@ def _append_sql_filter(clauses: list[str], args: list[Any], expression: str, val
     args.append(value)
 
 
+def _normalize_optional_query_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_optional_forecast_source(
+    value: str | None,
+    *,
+    blank_default: Literal["forecast"] | None = None,
+) -> Literal["forecast"] | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return blank_default
+    aliased = FORECAST_SOURCE_ALIASES.get(normalized)
+    if aliased is None:
+        raise HTTPException(status_code=422, detail="source must be 'forecast'")
+    return aliased
+
+
 def _append_forecast_run_filters(
     clauses: list[str],
     args: list[Any],
     *,
     status: str | None,
     model: str | None,
-    source: Literal["forecast", "previous_runs"] | None,
+    source: Literal["forecast"] | None,
     horizon_days: int | None,
 ) -> None:
     _append_sql_filter(clauses, args, "fr.status", status)
     _append_sql_filter(clauses, args, "fr.model", model)
-    _append_sql_filter(clauses, args, FORECAST_SOURCE_SQL, source)
     if horizon_days is not None:
         clauses.append(
             f"""
@@ -211,11 +246,10 @@ def _append_dm_forecast_filters(
     args: list[Any],
     *,
     model: str | None,
-    source: Literal["forecast", "previous_runs"] | None,
+    source: Literal["forecast"] | None,
     horizon_days: int | None,
 ) -> None:
     _append_sql_filter(clauses, args, "model", model)
-    _append_sql_filter(clauses, args, "source", source)
     _append_sql_filter(clauses, args, "horizon_days", horizon_days)
 
 
@@ -224,11 +258,10 @@ def _append_station_series_filters(
     args: list[Any],
     *,
     model: str | None,
-    source: Literal["forecast", "previous_runs"] | None,
+    source: Literal["forecast"] | None,
     horizon_days: int | None,
 ) -> None:
     _append_sql_filter(clauses, args, "fr.model", model)
-    _append_sql_filter(clauses, args, FORECAST_SOURCE_SQL, source)
     _append_sql_filter(clauses, args, "fv.horizon_days", horizon_days)
 
 
@@ -755,12 +788,22 @@ async def _resolve_station_id(
         )
     return resolved
 
-@app.get("/health")
-async def health() -> dict[str, Any]:
+@app.get("/live")
+async def live() -> dict[str, str]:
+    return {"status": "ok", "service": settings.app_name}
+
+
+@app.get("/ready")
+async def ready() -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         version = await conn.fetchval("SELECT version()")
     return {"status": "ok", "service": settings.app_name, "database": version}
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return await ready()
 
 
 @app.get("/api/stations")
@@ -1232,10 +1275,13 @@ async def list_forecast_runs(
     limit: int = Query(default=20, ge=1, le=200),
     status: str | None = None,
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
+    status = _normalize_optional_query_text(status)
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source)
     clauses = []
     args: list[Any] = []
     _append_forecast_run_filters(
@@ -1243,7 +1289,7 @@ async def list_forecast_runs(
         args,
         status=status,
         model=model,
-        source=source,
+        source=source_filter,
         horizon_days=horizon_days,
     )
 
@@ -1279,7 +1325,6 @@ async def list_forecast_runs(
             {where_sql}
             GROUP BY
                 fr.id,
-                COALESCE(fr.request_payload->>'source', 'forecast'),
                 NULLIF(fr.request_payload->>'archive_horizon_days', '')::INTEGER
             ORDER BY fr.run_at DESC
             LIMIT ${len(args)}
@@ -1297,13 +1342,15 @@ async def top_errors(
     limit: int = Query(default=20, ge=1, le=200),
     only_with_coordinates: bool = True,
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
     coordinates_filter = ""
     if only_with_coordinates:
         coordinates_filter = "AND latitude IS NOT NULL AND longitude IS NOT NULL"
@@ -1314,7 +1361,7 @@ async def top_errors(
         clauses,
         args,
         model=model,
-        source=source,
+        source=source_filter,
         horizon_days=horizon_days,
     )
 
@@ -1353,7 +1400,7 @@ async def top_errors(
         "start_date": start_date,
         "end_date": end_date,
         "model": model,
-        "source": source,
+        "source": source_filter,
         "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
@@ -1366,13 +1413,15 @@ async def analytics_summary(
     end_date: date,
     only_with_coordinates: bool = True,
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
     coordinates_filter = ""
     if only_with_coordinates:
         coordinates_filter = "AND latitude IS NOT NULL AND longitude IS NOT NULL"
@@ -1387,7 +1436,7 @@ async def analytics_summary(
                 clauses,
                 args,
                 model=model,
-                source=source,
+                source=source_filter,
                 horizon_days=horizon_days,
             )
             row = await conn.fetchrow(
@@ -1409,7 +1458,6 @@ async def analytics_summary(
         forecast_value_clauses = ["fv.forecast_date BETWEEN $1 AND $2"]
         forecast_value_args: list[Any] = [start_date, end_date]
         _append_sql_filter(forecast_value_clauses, forecast_value_args, "fr.model", model)
-        _append_sql_filter(forecast_value_clauses, forecast_value_args, FORECAST_SOURCE_SQL, source)
         _append_sql_filter(forecast_value_clauses, forecast_value_args, "fv.horizon_days", horizon_days)
         totals = await conn.fetchrow(
             f"""
@@ -1432,7 +1480,7 @@ async def analytics_summary(
         "start_date": start_date,
         "end_date": end_date,
         "model": model,
-        "source": source,
+        "source": source_filter,
         "horizon_days": horizon_days,
         "metrics": metrics,
         "totals": dict(totals),
@@ -1446,20 +1494,22 @@ async def worst_stations(
     metric: Literal["avg_temp", "min_temp", "max_temp", "precipitation"] = "avg_temp",
     limit: int = Query(default=20, ge=1, le=200),
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
     clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
     args: list[Any] = [metric, start_date, end_date]
     _append_dm_forecast_filters(
         clauses,
         args,
         model=model,
-        source=source,
+        source=source_filter,
         horizon_days=horizon_days,
     )
 
@@ -1490,7 +1540,7 @@ async def worst_stations(
         "start_date": start_date,
         "end_date": end_date,
         "model": model,
-        "source": source,
+        "source": source_filter,
         "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
@@ -1504,13 +1554,16 @@ async def station_series(
     station_id: int | None = None,
     wmo_index: str | None = None,
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    wmo_index = _normalize_optional_query_text(wmo_index)
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
     pool = get_pool()
     async with pool.acquire() as conn:
         resolved_station_id = await _resolve_station_id(
@@ -1528,7 +1581,7 @@ async def station_series(
             latest_forecast_clauses,
             latest_forecast_args,
             model=model,
-            source=source,
+            source=source_filter,
             horizon_days=horizon_days,
         )
 
@@ -1596,7 +1649,7 @@ async def station_series(
         "start_date": start_date,
         "end_date": end_date,
         "model": model,
-        "source": source,
+        "source": source_filter,
         "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
@@ -1657,13 +1710,15 @@ async def forecast_coverage(
     start_date: date | None = None,
     end_date: date | None = None,
     model: str | None = None,
-    source: Literal["forecast", "previous_runs"] | None = None,
+    source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if start_date is not None and end_date is not None and end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    model = _normalize_optional_query_text(model)
+    source_filter = _normalize_optional_forecast_source(source, blank_default=PUBLIC_FORECAST_SOURCE)
     clauses = ["fr.status IN ('success', 'partial_failed')"]
     args: list[Any] = []
     if start_date is not None:
@@ -1676,7 +1731,7 @@ async def forecast_coverage(
         clauses,
         args,
         model=model,
-        source=source,
+        source=source_filter,
         horizon_days=horizon_days,
     )
 
@@ -1698,7 +1753,7 @@ async def forecast_coverage(
         FROM forecast_values fv
         JOIN forecast_runs fr ON fr.id = fv.run_id
         WHERE {' AND '.join(clauses)}
-        GROUP BY fr.model, {FORECAST_SOURCE_SQL}, fv.horizon_days
+        GROUP BY fr.model, fv.horizon_days
         ORDER BY fr.model, source, fv.horizon_days
     """
 
@@ -1710,7 +1765,7 @@ async def forecast_coverage(
         "start_date": start_date,
         "end_date": end_date,
         "model": model,
-        "source": source,
+        "source": source_filter,
         "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],

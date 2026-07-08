@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - helper tests may run without r
     asyncpg = Any  # type: ignore[assignment]
 
 from skycast.config import settings
+from skycast.config import Settings
 from skycast.logging_utils import configure_logging
 
 if TYPE_CHECKING:
@@ -95,13 +98,26 @@ def serialize_outbox_message(message: OutboxMessage) -> dict[str, Any]:
     }
 
 
+def normalize_outbox_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        decoded = json.loads(payload)
+        if not isinstance(decoded, dict):
+            raise ValueError("Outbox payload JSON must decode to an object")
+        return decoded
+    raise TypeError(f"Unsupported outbox payload type: {type(payload).__name__}")
+
+
 def deserialize_outbox_message(payload: dict[str, Any]) -> OutboxMessage:
     return OutboxMessage(
         id=int(payload["id"]),
         topic=str(payload["topic"]),
         message_key=str(payload["message_key"]),
         aggregate_key=str(payload["aggregate_key"]),
-        payload=dict(payload["payload"]),
+        payload=normalize_outbox_payload(payload["payload"]),
         attempts=int(payload["attempts"]),
         created_at=datetime.fromisoformat(str(payload["created_at"])),
     )
@@ -121,6 +137,32 @@ def load_aiokafka_producer():
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on local env
         raise RuntimeError("aiokafka package is required to run the outbox worker") from exc
     return producer_cls
+
+
+def build_kafka_producer_kwargs(app_settings: Settings) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "bootstrap_servers": app_settings.kafka_bootstrap_servers,
+        "client_id": app_settings.kafka_client_id,
+        "enable_idempotence": True,
+        "security_protocol": app_settings.kafka_security_protocol,
+    }
+    if (
+        app_settings.kafka_ssl_cafile
+        or app_settings.kafka_ssl_certfile
+        or app_settings.kafka_ssl_keyfile
+    ):
+        ssl_context = ssl.create_default_context(cafile=app_settings.kafka_ssl_cafile)
+        if app_settings.kafka_ssl_certfile and app_settings.kafka_ssl_keyfile:
+            ssl_context.load_cert_chain(
+                certfile=app_settings.kafka_ssl_certfile,
+                keyfile=app_settings.kafka_ssl_keyfile,
+            )
+        kwargs["ssl_context"] = ssl_context
+    if app_settings.kafka_security_protocol.startswith("SASL"):
+        kwargs["sasl_mechanism"] = app_settings.kafka_sasl_mechanism
+        kwargs["sasl_plain_username"] = app_settings.kafka_sasl_username
+        kwargs["sasl_plain_password"] = app_settings.kafka_sasl_password
+    return kwargs
 
 
 class LocalOutboxSpool:
@@ -207,7 +249,7 @@ async def claim_outbox_batch(conn: asyncpg.Connection, batch_size: int) -> list[
             topic=row["topic"],
             message_key=row["message_key"],
             aggregate_key=row["aggregate_key"],
-            payload=dict(row["payload"]),
+            payload=normalize_outbox_payload(row["payload"]),
             attempts=row["attempts"],
             created_at=row["created_at"],
         )
@@ -310,14 +352,11 @@ class OutboxPublisher:
         producer_cls = load_aiokafka_producer()
         redis_client = redis_async.from_url(settings.redis_url, decode_responses=True)
         await redis_client.ping()
-        kafka_producer = producer_cls(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            client_id=settings.kafka_client_id,
-            enable_idempotence=True,
-        )
+        kafka_producer = producer_cls(**build_kafka_producer_kwargs(settings))
         try:
             await kafka_producer.start()
         except Exception:
+            await kafka_producer.stop()
             await redis_client.aclose()
             raise
         self._redis_client = redis_client

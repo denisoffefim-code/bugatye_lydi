@@ -1,0 +1,14 @@
+venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.env
+dump.sql
+open_meteo_backfill*.log
+tests/
+docs/
+er_diagram.png

@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skycast-migrations
+  namespace: skycast
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skycast-migrations
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: migrations
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-150043
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "skycast.migrate"]
+          envFrom:
+            - configMapRef:
+                name: skycast-shared-config
+            - secretRef:
+                name: skycast-runtime-secrets
+          volumeMounts:
+            - name: yandex-ca
+              mountPath: /etc/ssl/certs/yandex-cloud
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: yandex-ca
+          secret:
+            secretName: skycast-yandex-ca

@@ -27,6 +27,14 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _get_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    items = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return items or default
+
+
 _load_dotenv()
 
 
@@ -35,12 +43,28 @@ class Settings:
     app_name: str = os.getenv("APP_NAME", "SkyCast")
     host: str = os.getenv("APP_HOST", "0.0.0.0")
     port: int = int(os.getenv("APP_PORT", os.getenv("PORT", "8080")))
+    cors_allowed_origins: tuple[str, ...] = _get_csv(
+        "CORS_ALLOWED_ORIGINS",
+        (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ),
+    )
     database_url: str = os.getenv("DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     redis_stream_prefix: str = os.getenv("REDIS_STREAM_PREFIX", "skycast")
     kafka_bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     kafka_topic_prefix: str = os.getenv("KAFKA_TOPIC_PREFIX", "skycast")
     kafka_client_id: str = os.getenv("KAFKA_CLIENT_ID", "skycast-outbox-worker")
+    kafka_security_protocol: str = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+    kafka_ssl_cafile: str | None = os.getenv("KAFKA_SSL_CAFILE")
+    kafka_ssl_certfile: str | None = os.getenv("KAFKA_SSL_CERTFILE")
+    kafka_ssl_keyfile: str | None = os.getenv("KAFKA_SSL_KEYFILE")
+    kafka_sasl_mechanism: str | None = os.getenv("KAFKA_SASL_MECHANISM")
+    kafka_sasl_username: str | None = os.getenv("KAFKA_SASL_USERNAME")
+    kafka_sasl_password: str | None = os.getenv("KAFKA_SASL_PASSWORD")
     open_meteo_base_url: str = os.getenv("OPEN_METEO_BASE_URL", "https://api.open-meteo.com")
     open_meteo_previous_runs_base_url: str = os.getenv(
         "OPEN_METEO_PREVIOUS_RUNS_BASE_URL",
@@ -74,6 +98,13 @@ class Settings:
             raise RuntimeError("REDIS_URL is required")
         if not self.kafka_bootstrap_servers:
             raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required")
+        if self.kafka_security_protocol not in {"PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"}:
+            raise RuntimeError("KAFKA_SECURITY_PROTOCOL must be one of PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL")
+        if self.kafka_security_protocol.startswith("SASL"):
+            if not self.kafka_sasl_mechanism:
+                raise RuntimeError("KAFKA_SASL_MECHANISM is required for SASL Kafka")
+            if not self.kafka_sasl_username or not self.kafka_sasl_password:
+                raise RuntimeError("KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD are required for SASL Kafka")
         if self.outbox_batch_size < 1:
             raise RuntimeError("OUTBOX_BATCH_SIZE must be >= 1")
         if self.outbox_poll_seconds <= 0:
