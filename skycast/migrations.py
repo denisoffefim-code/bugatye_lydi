@@ -175,16 +175,25 @@ async def _migration_create_raw_layers(conn: asyncpg.Connection) -> None:
 
 
 async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -> None:
+    await conn.execute("DROP VIEW IF EXISTS dm_forecast_errors")
     await conn.execute(
         """
-        CREATE OR REPLACE VIEW dm_forecast_errors AS
+        CREATE VIEW dm_forecast_errors AS
         WITH latest_forecast AS (
-            SELECT DISTINCT ON (fv.station_id, fv.forecast_date, fv.horizon_days)
+            SELECT DISTINCT ON (
                 fv.station_id,
                 fv.forecast_date,
                 fv.horizon_days,
                 fr.provider,
                 fr.model,
+                COALESCE(fr.request_payload->>'source', 'forecast')
+            )
+                fv.station_id,
+                fv.forecast_date,
+                fv.horizon_days,
+                fr.provider,
+                fr.model,
+                COALESCE(fr.request_payload->>'source', 'forecast') AS source,
                 fr.run_at,
                 fv.avg_temp,
                 fv.min_temp,
@@ -193,7 +202,14 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
             FROM forecast_values fv
             JOIN forecast_runs fr ON fr.id = fv.run_id
             WHERE fr.status IN ('success', 'partial_failed')
-            ORDER BY fv.station_id, fv.forecast_date, fv.horizon_days, fr.run_at DESC
+            ORDER BY
+                fv.station_id,
+                fv.forecast_date,
+                fv.horizon_days,
+                fr.provider,
+                fr.model,
+                COALESCE(fr.request_payload->>'source', 'forecast'),
+                fr.run_at DESC
         ),
         metric_rows AS (
             SELECT
@@ -207,6 +223,7 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
                 lf.horizon_days,
                 lf.provider,
                 lf.model,
+                lf.source,
                 lf.run_at,
                 'avg_temp'::VARCHAR(32) AS metric,
                 lf.avg_temp::NUMERIC AS forecast_value,
@@ -233,6 +250,7 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
                 lf.horizon_days,
                 lf.provider,
                 lf.model,
+                lf.source,
                 lf.run_at,
                 'min_temp'::VARCHAR(32) AS metric,
                 lf.min_temp::NUMERIC AS forecast_value,
@@ -259,6 +277,7 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
                 lf.horizon_days,
                 lf.provider,
                 lf.model,
+                lf.source,
                 lf.run_at,
                 'max_temp'::VARCHAR(32) AS metric,
                 lf.max_temp::NUMERIC AS forecast_value,
@@ -285,6 +304,7 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
                 lf.horizon_days,
                 lf.provider,
                 lf.model,
+                lf.source,
                 lf.run_at,
                 'precipitation'::VARCHAR(32) AS metric,
                 lf.precipitation::NUMERIC AS forecast_value,
@@ -309,6 +329,7 @@ async def _create_or_replace_dm_forecast_errors_view(conn: asyncpg.Connection) -
             horizon_days,
             provider,
             model,
+            source,
             run_at,
             metric,
             ROUND(forecast_value, 2) AS forecast_value,
@@ -329,6 +350,10 @@ async def _migration_create_dm_forecast_errors(conn: asyncpg.Connection) -> None
 
 
 async def _migration_refresh_dm_forecast_errors_horizon_aware(conn: asyncpg.Connection) -> None:
+    await _create_or_replace_dm_forecast_errors_view(conn)
+
+
+async def _migration_refresh_dm_forecast_errors_source_model_aware(conn: asyncpg.Connection) -> None:
     await _create_or_replace_dm_forecast_errors_view(conn)
 
 
@@ -387,6 +412,10 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             (
                 "skycast_refresh_dm_forecast_errors_horizon_aware",
                 _migration_refresh_dm_forecast_errors_horizon_aware,
+            ),
+            (
+                "skycast_refresh_dm_forecast_errors_source_model_aware",
+                _migration_refresh_dm_forecast_errors_source_model_aware,
             ),
             ("skycast_create_users_and_auth", _migration_create_users_and_auth),
         ]

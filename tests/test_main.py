@@ -1,9 +1,55 @@
 from datetime import date
 import unittest
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from skycast.main import _determine_forecast_run_status, list_stations
+from skycast.main import (
+    _determine_forecast_run_status,
+    list_forecast_runs,
+    list_stations,
+    station_series,
+    top_errors,
+)
+
+
+class _FakeAcquire:
+    def __init__(self, conn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _FakePool:
+    def __init__(self, conn) -> None:
+        self._conn = conn
+
+    def acquire(self) -> _FakeAcquire:
+        return _FakeAcquire(self._conn)
+
+
+class _RecordingConnection:
+    def __init__(self, *, fetch_results=None, fetchrow_results=None) -> None:
+        self.fetch_results = list(fetch_results or [])
+        self.fetchrow_results = list(fetchrow_results or [])
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetch(self, query: str, *args):
+        self.fetch_calls.append((query, args))
+        if self.fetch_results:
+            return self.fetch_results.pop(0)
+        return []
+
+    async def fetchrow(self, query: str, *args):
+        self.fetchrow_calls.append((query, args))
+        if self.fetchrow_results:
+            return self.fetchrow_results.pop(0)
+        return None
 
 
 class ForecastRunStatusTests(unittest.TestCase):
@@ -49,3 +95,75 @@ class StationFilterValidationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("end_date must be greater than or equal to start_date", ctx.exception.detail)
+
+
+class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_forecast_runs_applies_source_model_and_horizon_filters(self) -> None:
+        conn = _RecordingConnection(fetch_results=[[{"id": 9, "source": "previous_runs"}]])
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await list_forecast_runs(
+                limit=5,
+                status="success",
+                model="best_match",
+                source="previous_runs",
+                horizon_days=3,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') = $3", query)
+        self.assertIn("fv_filter.horizon_days = $4", query)
+        self.assertEqual(args, ("success", "best_match", "previous_runs", 3, 5))
+
+    async def test_top_errors_applies_source_model_and_horizon_filters(self) -> None:
+        conn = _RecordingConnection(fetch_results=[[]])
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+            response = await top_errors(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 10),
+                metric="avg_temp",
+                limit=20,
+                model="best_match",
+                source="previous_runs",
+                horizon_days=2,
+            )
+
+        self.assertEqual(response["returned"], 0)
+        query, args = conn.fetch_calls[0]
+        self.assertIn("source = $5", query)
+        self.assertIn("horizon_days = $6", query)
+        self.assertEqual(
+            args,
+            ("avg_temp", date(2026, 7, 1), date(2026, 7, 10), "best_match", "previous_runs", 2, 20),
+        )
+
+    async def test_station_series_keeps_horizon_model_and_source_dimensions(self) -> None:
+        conn = _RecordingConnection(
+            fetchrow_results=[{"id": 1, "wmo_index": "12345", "name": "Test", "country": "RU", "latitude": 1, "longitude": 2}],
+            fetch_results=[[{"observation_date": date(2026, 7, 1), "horizon_days": 2, "source": "previous_runs"}]],
+        )
+
+        with (
+            patch("skycast.main.get_pool", return_value=_FakePool(conn)),
+            patch("skycast.main._resolve_station_id", return_value=1),
+        ):
+            response = await station_series(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 2),
+                station_id=1,
+                model="best_match",
+                source="previous_runs",
+                horizon_days=2,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertIn("DISTINCT ON (", query)
+        self.assertIn("COALESCE(fr.request_payload->>'source', 'forecast') AS source", query)
+        self.assertIn("fv.horizon_days = $6", query)
+        self.assertEqual(
+            args,
+            (1, date(2026, 7, 1), date(2026, 7, 2), "best_match", "previous_runs", 2),
+        )

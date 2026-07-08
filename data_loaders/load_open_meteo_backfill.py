@@ -173,6 +173,11 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Initial retry delay in seconds. Default: %(default)s",
     )
+    parser.add_argument(
+        "--skip-outbox",
+        action="store_true",
+        help="Persist forecast rows without creating forecast.accepted outbox messages.",
+    )
     return parser.parse_args()
 
 
@@ -249,6 +254,7 @@ async def main_async(args: argparse.Namespace) -> None:
             model=args.model,
             source="previous_runs",
             archive_horizon_days=1,
+            publish_outbox_events=not args.skip_outbox,
             station_ids=args.station_ids,
             wmo_indices=args.wmo_indices,
             limit=args.limit,
@@ -266,7 +272,8 @@ async def main_async(args: argparse.Namespace) -> None:
             "[OPEN_METEO] Runtime config: "
             f"stations={len(stations)}, horizons={horizons}, chunks={len(chunks)}, "
             f"station_requests={total_requests}, model={args.model}, "
-            f"date_range={args.start_date.isoformat()}..{args.end_date.isoformat()}",
+            f"date_range={args.start_date.isoformat()}..{args.end_date.isoformat()}, "
+            f"publish_outbox_events={not args.skip_outbox}",
             flush=True,
         )
 
@@ -286,6 +293,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         model=args.model,
                         source="previous_runs",
                         archive_horizon_days=horizon,
+                        publish_outbox_events=not args.skip_outbox,
                         station_ids=args.station_ids,
                         wmo_indices=args.wmo_indices,
                         limit=args.limit,
@@ -355,26 +363,27 @@ async def main_async(args: argparse.Namespace) -> None:
                                             prepared,
                                         )
                                         await _save_forecast_values(conn, run_id, station, prepared)
-                                        for value in prepared:
-                                            dedupe_key = build_forecast_dedupe_key(
-                                                run_id,
-                                                station["id"],
-                                                value["forecast_date"],
-                                            )
-                                            await _enqueue_outbox_message(
-                                                conn,
-                                                topic="forecast.accepted",
-                                                aggregate_key=str(run_id),
-                                                dedupe_key=dedupe_key,
-                                                payload={
-                                                    "run_id": run_id,
-                                                    "station_id": station["id"],
-                                                    "wmo_index": station["wmo_index"],
-                                                    "model": args.model,
-                                                    "source": "previous_runs",
-                                                    **value["raw_payload"],
-                                                },
-                                            )
+                                        if request.publish_outbox_events:
+                                            for value in prepared:
+                                                dedupe_key = build_forecast_dedupe_key(
+                                                    run_id,
+                                                    station["id"],
+                                                    value["forecast_date"],
+                                                )
+                                                await _enqueue_outbox_message(
+                                                    conn,
+                                                    topic="forecast.accepted",
+                                                    aggregate_key=str(run_id),
+                                                    dedupe_key=dedupe_key,
+                                                    payload={
+                                                        "run_id": run_id,
+                                                        "station_id": station["id"],
+                                                        "wmo_index": station["wmo_index"],
+                                                        "model": args.model,
+                                                        "source": "previous_runs",
+                                                        **value["raw_payload"],
+                                                    },
+                                                )
                                     async with saved_lock:
                                         saved_rows += len(prepared)
                             except Exception as exc:

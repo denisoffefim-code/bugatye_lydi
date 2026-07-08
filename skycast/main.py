@@ -68,6 +68,7 @@ class ForecastFetchRequest(BaseModel):
     model: str = settings.open_meteo_model
     source: Literal["forecast", "previous_runs"] = "forecast"
     archive_horizon_days: int = Field(default=1, ge=1, le=7)
+    publish_outbox_events: bool = True
     station_ids: list[int] | None = None
     wmo_indices: list[str] | None = None
     limit: int | None = Field(default=None, ge=1, le=200)
@@ -126,6 +127,7 @@ METRIC_SQL_MAP = {
     "max_temp": ("fv.max_temp", "wd.max_temp"),
     "precipitation": ("fv.precipitation", "wd.precipitation"),
 }
+FORECAST_SOURCE_SQL = "COALESCE(fr.request_payload->>'source', 'forecast')"
 
 
 def _auth_required_exception() -> HTTPException:
@@ -142,6 +144,65 @@ def _invalid_credentials_exception() -> HTTPException:
         detail="Invalid email or password",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def _append_sql_filter(clauses: list[str], args: list[Any], expression: str, value: Any) -> None:
+    if value is None:
+        return
+    clauses.append(f"{expression} = ${len(args) + 1}")
+    args.append(value)
+
+
+def _append_forecast_run_filters(
+    clauses: list[str],
+    args: list[Any],
+    *,
+    status: str | None,
+    model: str | None,
+    source: Literal["forecast", "previous_runs"] | None,
+    horizon_days: int | None,
+) -> None:
+    _append_sql_filter(clauses, args, "fr.status", status)
+    _append_sql_filter(clauses, args, "fr.model", model)
+    _append_sql_filter(clauses, args, FORECAST_SOURCE_SQL, source)
+    if horizon_days is not None:
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM forecast_values fv_filter
+                WHERE fv_filter.run_id = fr.id
+                  AND fv_filter.horizon_days = ${len(args) + 1}
+            )
+            """.strip()
+        )
+        args.append(horizon_days)
+
+
+def _append_dm_forecast_filters(
+    clauses: list[str],
+    args: list[Any],
+    *,
+    model: str | None,
+    source: Literal["forecast", "previous_runs"] | None,
+    horizon_days: int | None,
+) -> None:
+    _append_sql_filter(clauses, args, "model", model)
+    _append_sql_filter(clauses, args, "source", source)
+    _append_sql_filter(clauses, args, "horizon_days", horizon_days)
+
+
+def _append_station_series_filters(
+    clauses: list[str],
+    args: list[Any],
+    *,
+    model: str | None,
+    source: Literal["forecast", "previous_runs"] | None,
+    horizon_days: int | None,
+) -> None:
+    _append_sql_filter(clauses, args, "fr.model", model)
+    _append_sql_filter(clauses, args, FORECAST_SOURCE_SQL, source)
+    _append_sql_filter(clauses, args, "fv.horizon_days", horizon_days)
 
 
 def _user_out_from_row(row: Any) -> UserOut:
@@ -936,6 +997,7 @@ async def fetch_forecasts(
                 "model": request.model,
                 "source": request.source,
                 "archive_horizon_days": request.archive_horizon_days,
+                "publish_outbox_events": request.publish_outbox_events,
             },
         )
 
@@ -1000,26 +1062,27 @@ async def fetch_forecasts(
                         async with pool.acquire() as conn:
                             await _save_raw_forecast_events(conn, run_id, station, request.model, prepared)
                             await _save_forecast_values(conn, run_id, station, prepared)
-                            for value in prepared:
-                                dedupe_key = build_forecast_dedupe_key(
-                                    run_id,
-                                    station["id"],
-                                    value["forecast_date"],
-                                )
-                                await _enqueue_outbox_message(
-                                    conn,
-                                    topic="forecast.accepted",
-                                    aggregate_key=str(run_id),
-                                    dedupe_key=dedupe_key,
-                                    payload={
-                                        "run_id": run_id,
-                                        "station_id": station["id"],
-                                        "wmo_index": station["wmo_index"],
-                                        "model": request.model,
-                                        "source": request.source,
-                                        **value["raw_payload"],
-                                    },
-                                )
+                            if request.publish_outbox_events:
+                                for value in prepared:
+                                    dedupe_key = build_forecast_dedupe_key(
+                                        run_id,
+                                        station["id"],
+                                        value["forecast_date"],
+                                    )
+                                    await _enqueue_outbox_message(
+                                        conn,
+                                        topic="forecast.accepted",
+                                        aggregate_key=str(run_id),
+                                        dedupe_key=dedupe_key,
+                                        payload={
+                                            "run_id": run_id,
+                                            "station_id": station["id"],
+                                            "wmo_index": station["wmo_index"],
+                                            "model": request.model,
+                                            "source": request.source,
+                                            **value["raw_payload"],
+                                        },
+                                    )
                         async with saved_lock:
                             saved_rows += len(prepared)
                     except Exception as exc:  # pragma: no cover - defensive endpoint path
@@ -1069,6 +1132,7 @@ async def fetch_forecasts(
                 "stations_requested": len(stations),
                 "forecast_rows_saved": saved_rows,
                 "failed_stations": len(errors),
+                "publish_outbox_events": request.publish_outbox_events,
             },
         )
         return {
@@ -1078,6 +1142,7 @@ async def fetch_forecasts(
             "failed_stations": len(errors),
             "source": request.source,
             "archive_horizon_days": request.archive_horizon_days if request.source == "previous_runs" else None,
+            "publish_outbox_events": request.publish_outbox_events,
             "errors": errors[:20],
         }
     except Exception as exc:
@@ -1100,12 +1165,20 @@ async def fetch_forecasts(
 async def list_forecast_runs(
     limit: int = Query(default=20, ge=1, le=200),
     status: str | None = None,
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
 ) -> dict[str, Any]:
     clauses = []
     args: list[Any] = []
-    if status:
-        clauses.append(f"fr.status = ${len(args) + 1}")
-        args.append(status)
+    _append_forecast_run_filters(
+        clauses,
+        args,
+        status=status,
+        model=model,
+        source=source,
+        horizon_days=horizon_days,
+    )
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     args.append(limit)
@@ -1118,6 +1191,8 @@ async def list_forecast_runs(
                 fr.id,
                 fr.provider,
                 fr.model,
+                {FORECAST_SOURCE_SQL} AS source,
+                NULLIF(fr.request_payload->>'archive_horizon_days', '')::INTEGER AS requested_archive_horizon_days,
                 fr.status,
                 fr.run_at,
                 fr.requested_start_date,
@@ -1127,11 +1202,18 @@ async def list_forecast_runs(
                 fr.completed_at,
                 fr.error_message,
                 COUNT(fv.id) AS saved_rows,
-                COUNT(DISTINCT fv.station_id) AS saved_stations
+                COUNT(DISTINCT fv.station_id) AS saved_stations,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT fv.horizon_days) FILTER (WHERE fv.horizon_days IS NOT NULL),
+                    ARRAY[]::INTEGER[]
+                ) AS saved_horizon_days
             FROM forecast_runs fr
             LEFT JOIN forecast_values fv ON fv.run_id = fr.id
             {where_sql}
-            GROUP BY fr.id
+            GROUP BY
+                fr.id,
+                COALESCE(fr.request_payload->>'source', 'forecast'),
+                NULLIF(fr.request_payload->>'archive_horizon_days', '')::INTEGER
             ORDER BY fr.run_at DESC
             LIMIT ${len(args)}
             """,
@@ -1147,6 +1229,9 @@ async def top_errors(
     metric: Literal["avg_temp", "min_temp", "max_temp", "precipitation"] = "avg_temp",
     limit: int = Query(default=20, ge=1, le=200),
     only_with_coordinates: bool = True,
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1154,6 +1239,16 @@ async def top_errors(
     coordinates_filter = ""
     if only_with_coordinates:
         coordinates_filter = "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+
+    clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
+    args: list[Any] = [metric, start_date, end_date]
+    _append_dm_forecast_filters(
+        clauses,
+        args,
+        model=model,
+        source=source,
+        horizon_days=horizon_days,
+    )
 
     query = f"""
         SELECT
@@ -1167,6 +1262,7 @@ async def top_errors(
             horizon_days,
             provider,
             model,
+            source,
             run_at,
             forecast_value,
             actual_value,
@@ -1174,21 +1270,23 @@ async def top_errors(
             absolute_error,
             error_rank
         FROM dm_forecast_errors
-        WHERE metric = $1
-          AND forecast_date BETWEEN $2 AND $3
+        WHERE {' AND '.join(clauses)}
           {coordinates_filter}
-        ORDER BY absolute_error DESC, forecast_date DESC
-        LIMIT $4
+        ORDER BY absolute_error DESC, forecast_date DESC, horizon_days ASC
+        LIMIT ${len(args) + 1}
     """
 
     pool = get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, metric, start_date, end_date, limit)
+        rows = await conn.fetch(query, *args, limit)
 
     return {
         "metric": metric,
         "start_date": start_date,
         "end_date": end_date,
+        "model": model,
+        "source": source,
+        "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
     }
@@ -1199,6 +1297,9 @@ async def analytics_summary(
     start_date: date,
     end_date: date,
     only_with_coordinates: bool = True,
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1211,6 +1312,15 @@ async def analytics_summary(
     metrics: dict[str, Any] = {}
     async with pool.acquire() as conn:
         for metric in METRIC_SQL_MAP:
+            clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
+            args: list[Any] = [metric, start_date, end_date]
+            _append_dm_forecast_filters(
+                clauses,
+                args,
+                model=model,
+                source=source,
+                horizon_days=horizon_days,
+            )
             row = await conn.fetchrow(
                 f"""
                 SELECT
@@ -1220,32 +1330,41 @@ async def analytics_summary(
                     ROUND(AVG(signed_error), 2) AS bias,
                     ROUND(MAX(absolute_error), 2) AS max_absolute_error
                 FROM dm_forecast_errors
-                WHERE metric = $1
-                  AND forecast_date BETWEEN $2 AND $3
+                WHERE {' AND '.join(clauses)}
                   {coordinates_filter}
                 """,
-                metric,
-                start_date,
-                end_date,
+                *args,
             )
             metrics[metric] = dict(row)
 
+        forecast_value_clauses = ["fv.forecast_date BETWEEN $1 AND $2"]
+        forecast_value_args: list[Any] = [start_date, end_date]
+        _append_sql_filter(forecast_value_clauses, forecast_value_args, "fr.model", model)
+        _append_sql_filter(forecast_value_clauses, forecast_value_args, FORECAST_SOURCE_SQL, source)
+        _append_sql_filter(forecast_value_clauses, forecast_value_args, "fv.horizon_days", horizon_days)
         totals = await conn.fetchrow(
-            """
+            f"""
             SELECT
                 (SELECT COUNT(*) FROM stations) AS stations_total,
                 (SELECT COUNT(*) FROM weather_data WHERE observation_date BETWEEN $1 AND $2) AS actual_rows,
-                (SELECT COUNT(*) FROM forecast_values WHERE forecast_date BETWEEN $1 AND $2) AS forecast_rows,
+                (
+                    SELECT COUNT(*)
+                    FROM forecast_values fv
+                    JOIN forecast_runs fr ON fr.id = fv.run_id
+                    WHERE {' AND '.join(forecast_value_clauses)}
+                ) AS forecast_rows,
                 (SELECT COUNT(*) FROM atm8c_data) AS atm8c_rows,
                 (SELECT COUNT(*) FROM srok8c_data) AS srok8c_rows
             """,
-            start_date,
-            end_date,
+            *forecast_value_args,
         )
 
     return {
         "start_date": start_date,
         "end_date": end_date,
+        "model": model,
+        "source": source,
+        "horizon_days": horizon_days,
         "metrics": metrics,
         "totals": dict(totals),
     }
@@ -1257,11 +1376,24 @@ async def worst_stations(
     end_date: date,
     metric: Literal["avg_temp", "min_temp", "max_temp", "precipitation"] = "avg_temp",
     limit: int = Query(default=20, ge=1, le=200),
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
-    query = """
+    clauses = ["metric = $1", "forecast_date BETWEEN $2 AND $3"]
+    args: list[Any] = [metric, start_date, end_date]
+    _append_dm_forecast_filters(
+        clauses,
+        args,
+        model=model,
+        source=source,
+        horizon_days=horizon_days,
+    )
+
+    query = f"""
         SELECT
             station_id,
             wmo_index,
@@ -1273,21 +1405,23 @@ async def worst_stations(
             ROUND(AVG(absolute_error), 2) AS mae,
             ROUND(MAX(absolute_error), 2) AS max_absolute_error
         FROM dm_forecast_errors
-        WHERE metric = $1
-          AND forecast_date BETWEEN $2 AND $3
+        WHERE {' AND '.join(clauses)}
         GROUP BY station_id, wmo_index, name, country, latitude, longitude
         ORDER BY mae DESC NULLS LAST, max_absolute_error DESC NULLS LAST
-        LIMIT $4
+        LIMIT ${len(args) + 1}
     """
 
     pool = get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, metric, start_date, end_date, limit)
+        rows = await conn.fetch(query, *args, limit)
 
     return {
         "metric": metric,
         "start_date": start_date,
         "end_date": end_date,
+        "model": model,
+        "source": source,
+        "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
     }
@@ -1299,6 +1433,9 @@ async def station_series(
     end_date: date,
     station_id: int | None = None,
     wmo_index: str | None = None,
+    model: str | None = None,
+    source: Literal["forecast", "previous_runs"] | None = None,
+    horizon_days: int | None = Query(default=None, ge=1, le=7),
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
@@ -1309,6 +1446,19 @@ async def station_series(
             conn,
             station_id=station_id,
             wmo_index=wmo_index,
+        )
+        latest_forecast_clauses = [
+            "fv.station_id = $1",
+            "fr.status IN ('success', 'partial_failed')",
+            "fv.forecast_date BETWEEN $2 AND $3",
+        ]
+        latest_forecast_args: list[Any] = [resolved_station_id, start_date, end_date]
+        _append_station_series_filters(
+            latest_forecast_clauses,
+            latest_forecast_args,
+            model=model,
+            source=source,
+            horizon_days=horizon_days,
         )
 
         station = await conn.fetchrow(
@@ -1321,13 +1471,20 @@ async def station_series(
         )
 
         rows = await conn.fetch(
-            """
+            f"""
             WITH latest_forecast AS (
-                SELECT DISTINCT ON (fv.forecast_date)
+                SELECT DISTINCT ON (
                     fv.forecast_date,
                     fv.horizon_days,
                     fr.provider,
                     fr.model,
+                    {FORECAST_SOURCE_SQL}
+                )
+                    fv.forecast_date,
+                    fv.horizon_days,
+                    fr.provider,
+                    fr.model,
+                    {FORECAST_SOURCE_SQL} AS source,
                     fr.run_at,
                     fv.avg_temp AS forecast_avg_temp,
                     fv.min_temp AS forecast_min_temp,
@@ -1336,13 +1493,18 @@ async def station_series(
                     fv.max_wind_speed AS forecast_max_wind_speed
                 FROM forecast_values fv
                 JOIN forecast_runs fr ON fr.id = fv.run_id
-                WHERE fv.station_id = $1
-                  AND fr.status IN ('success', 'partial_failed')
-                  AND fv.forecast_date BETWEEN $2 AND $3
-                ORDER BY fv.forecast_date, fr.run_at DESC
+                WHERE {' AND '.join(latest_forecast_clauses)}
+                ORDER BY
+                    fv.forecast_date,
+                    fv.horizon_days,
+                    fr.provider,
+                    fr.model,
+                    {FORECAST_SOURCE_SQL},
+                    fr.run_at DESC
             )
             SELECT
                 wd.observation_date,
+                lf.source,
                 lf.provider,
                 lf.model,
                 lf.run_at,
@@ -1365,17 +1527,18 @@ async def station_series(
                 ON lf.forecast_date = wd.observation_date
             WHERE wd.station_id = $1
               AND wd.observation_date BETWEEN $2 AND $3
-            ORDER BY wd.observation_date
+            ORDER BY wd.observation_date, lf.horizon_days NULLS FIRST, lf.model NULLS FIRST, lf.source NULLS FIRST
             """,
-            resolved_station_id,
-            start_date,
-            end_date,
+            *latest_forecast_args,
         )
 
     return {
         "station": dict(station),
         "start_date": start_date,
         "end_date": end_date,
+        "model": model,
+        "source": source,
+        "horizon_days": horizon_days,
         "returned": len(rows),
         "items": [dict(row) for row in rows],
     }

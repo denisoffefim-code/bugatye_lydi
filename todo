@@ -1,38 +1,97 @@
-Зафиксировать scope и архитектуру.
-Цель первой версии: показать самые большие ошибки прогноза по станциям и датам, но уже в виде системы из трех сервисов и отдельного аналитического слоя.
+Остаточный TODO по проекту
 
-Разделить текущий backend на 3 сервиса.
-forecast-service: периодически тянет прогнозы, пишет в очередь или staging.
-telemetry-service: принимает факт погоды, валидирует, дедуплицирует, пишет в ingest/raw.
-analytics-api: читает подготовленные витрины и отдает UI.
+Уже сделано и не требует отдельного пункта в backlog:
+- backend разложен на `forecast-service`, `telemetry-service`, `analytics-api`;
+- есть `raw_telemetry_events`, `raw_forecast_events`, `forecast_values`, `weather_data`, `dm_forecast_errors`;
+- есть базовый auth на `users` и `auth_sessions`;
+- есть `service_outbox`, Redis Streams, Kafka, локальный spool и outbox worker;
+- есть `live` / `ready` / `health` / `metrics`, structured logs и базовые Prometheus-метрики;
+- есть dev-запуск через `docker-compose`.
 
-Выстроить хранение данных.
-PostgreSQL как OLTP и ingest.
-S3/Object Storage для сырого исторического архива.
-DWH-слои: raw -> ods -> dm.
-Витрина dm_forecast_errors: station/date/model/horizon/forecast/actual/absolute_error/rank.
-Отдельно описать backfill-процессы и дедупликацию.
+P0. Закрыть backend до рабочего production-like состояния
 
-Добавить надежность.
-Очередь Redis streams или Kafka.
-Retry/backoff уже частично есть, но нужен вынос на уровень producer/consumer.
-Локальный spool/outbox при недоступности внешних систем.
-Идемпотентность загрузки прогноза и телеметрии.
-Health/readiness/liveness.
+1. Данные и backfill
+- Догрузить historical backfill Open-Meteo `previous_runs` по всем станциям с координатами и горизонтам `1..7`.
+- Зафиксировать фактическое покрытие архивных прогнозов по моделям и полям: от какой даты есть `temperature`, `precipitation`, `wind`, где есть пропуски.
+- Зафиксировать operational policy для bulk backfill: когда historical загрузку запускать с `publish_outbox_events=false` / `--skip-outbox`, а когда transport-события всё-таки нужны downstream.
+- Добрать координаты для станций, которых нет в NOAA IGRA, и зафиксировать fallback-источник координат.
+- Описать runbook для повторного backfill: диапазоны дат, chunk size, retry policy, safe rerun, валидация результата.
 
-Подготовить деплой.
-docker-compose для dev.
-Deployment, Service, Ingress, ConfigMap, Secret, HPA для Kubernetes в Yandex Cloud.
-Отдельно описать, как живут две версии приложения одновременно.
+2. Аналитика и read models
+- Проверить, нужны ли отдельные `dm_*` витрины помимо `dm_forecast_errors`: coverage, station series, summary by station/model/horizon.
+- Зафиксировать контракт аналитики: какая запись считается "latest forecast" для одной даты при нескольких horizon/model/source.
 
-Добавить observability.
-Метрики запросов, latency, error rate, queue lag, ingest lag.
-Structured logs.
-OpenTelemetry tracing.
-Alert rules на падение ingest, рост ошибок прогноза, недоступность БД/очереди.
+3. Auth и доступ
+- Вынести auth surface в понятную deployment-схему для split services: отдельный auth/gateway endpoint или общий edge-service.
+- Реализовать RBAC вместо одного поля `role`: минимум `admin`, `analyst`, `viewer` с реальными проверками на endpoint-уровне.
+- Определить, какие операции доступны только `admin`: backfill координат, fetch/backfill прогнозов, просмотр service coverage, logout other sessions.
+- Добавить smoke-тесты на роли и отказ в доступе.
 
-Сделать frontend и auth.
-Login, роли admin/analyst/viewer.
-Дашборд по регионам/станциям.
-Топ самых больших ошибок.
-Историческая аналитика и алерты.
+4. Observability
+- Добавить OpenTelemetry tracing для HTTP, PostgreSQL, Redis и Kafka.
+- Добавить нормальные latency-метрики с buckets/histograms, а не только sums/counts.
+- Описать и/или реализовать alert rules:
+  - backlog/outbox растет;
+  - ingest остановился;
+  - БД недоступна;
+  - массово падает загрузка прогноза;
+  - слишком много failed/partial_failed forecast runs.
+- Подготовить минимальный dashboard: request rate, error rate, p95 latency, forecast backlog, telemetry backlog, outbox lag.
+
+P1. Развертка в Yandex Cloud
+
+5. Container delivery
+- Подготовить production image build для всех сервисов и worker.
+- Настроить публикацию образов в Yandex Container Registry.
+- Зафиксировать versioning/tagging strategy: immutable tags по commit sha и отдельный release tag.
+
+6. Kubernetes manifests для Yandex Cloud
+- Добавить манифесты для:
+  - `forecast-service`
+  - `telemetry-service`
+  - `analytics-api`
+  - `outbox-worker`
+  - при необходимости `migration-job`
+- Для каждого сервиса подготовить `Deployment`, `Service`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler`.
+- Добавить `Ingress` или Yandex ALB ingress configuration для внешнего входа.
+- Добавить `PodDisruptionBudget`, requests/limits и probes.
+- Отдельно решить, где выполняются миграции: startup migration, отдельный Job или pre-deploy step.
+
+7. Инфраструктурные зависимости в Yandex Cloud
+- Зафиксировать целевую схему:
+  - Managed PostgreSQL;
+  - Managed Kubernetes;
+  - Container Registry;
+  - Object Storage;
+  - Managed Redis и/или Managed Kafka либо self-hosted transport внутри кластера.
+- Описать хранение секретов: `DATABASE_URL`, CA certificate, Redis/Kafka credentials, auth settings.
+- Подготовить схему сетевого доступа: security groups, internal/external services, egress в Open-Meteo и NOAA.
+- Решить судьбу локального spool в Kubernetes: `emptyDir`, PVC или отключение spool при другой delivery strategy.
+
+8. Эксплуатация и rollout
+- Описать пошаговый deploy в Yandex Cloud: bootstrap infra, apply manifests, migrate DB, smoke checks, rollback.
+- Описать, как одновременно живут две версии приложения при обновлении schema и worker logic.
+- Добавить post-deploy проверки:
+  - `/ready` и `/metrics` на всех сервисах;
+  - запись телеметрии;
+  - запуск загрузки прогноза;
+  - доставка одного outbox-сообщения до Redis/Kafka.
+- Подготовить runbook на инциденты: failed migrations, broken outbox, lagging worker, expired certs, broken DB connectivity.
+
+P2. Хранение и данные вне OLTP
+
+9. Object Storage и сырой архив
+- Перенести сырой исторический архив и/или большие bulk dumps в Yandex Object Storage.
+- Определить layout бакета: source/date/version/checksum.
+- Хранить рядом manifest с метаданными загрузки: source, URL, размер, checksum, loaded_at, loader version.
+- Описать восстановление БД из Object Storage и повторный импорт.
+
+10. Тесты и качество
+- Добавить интеграционные тесты на split services через `docker-compose`.
+- Добавить тесты на outbox worker с Redis/Kafka недоступными и последующим replay.
+- Добавить тесты на analytics queries при нескольких `horizon_days` и нескольких `forecast_runs` на одну дату.
+- Добавить test coverage для bulk backfill CLI и идемпотентного rerun.
+
+После backend
+- Фронтенд-аналитика: dashboard по регионам/станциям, top errors, historical analytics.
+- UI для login и role-based flows.
