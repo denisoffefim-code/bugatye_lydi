@@ -353,6 +353,10 @@ async def _migration_refresh_dm_forecast_errors_source_model_aware(conn: asyncpg
     await _create_or_replace_dm_forecast_errors_view(conn)
 
 
+async def _migration_refresh_dm_forecast_errors_unified_source(conn: asyncpg.Connection) -> None:
+    await _create_or_replace_dm_forecast_errors_view(conn)
+
+
 async def _migration_create_users_and_auth(conn: asyncpg.Connection) -> None:
     await conn.execute(
         """
@@ -417,6 +421,10 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             (
                 "skycast_refresh_dm_forecast_errors_source_model_aware",
                 _migration_refresh_dm_forecast_errors_source_model_aware,
+            ),
+            (
+                "skycast_refresh_dm_forecast_errors_unified_source",
+                _migration_refresh_dm_forecast_errors_unified_source,
             ),
             ("skycast_create_users_and_auth", _migration_create_users_and_auth),
             ("skycast_refresh_user_roles_for_rbac", _migration_refresh_user_roles_for_rbac),

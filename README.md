@@ -68,10 +68,12 @@ HTTP API:
 }
 ```
 
+`source: "previous_runs"` нужен только для самого historical fetch. На read-side historical и live forecast теперь читаются как единый `forecast`.
+
 Coverage по historical forecast:
 
 ```text
-GET /api/analytics/forecast-coverage?source=previous_runs&model=best_match
+GET /api/analytics/forecast-coverage?model=best_match
 ```
 
 Safe rerun policy и operational steps описаны в [docs/backfill_runbook.md](/C:/Users/Дарья/Documents/programming_projects/lshpi/bugatye_lydi/docs/backfill_runbook.md).

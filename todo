@@ -7,7 +7,7 @@
 - есть `service_outbox`, Redis Streams, Kafka, локальный spool и outbox worker;
 - есть `live` / `ready` / `health` / `metrics`, structured logs и базовые Prometheus-метрики;
 - есть dev-запуск через `docker-compose`;
-- analytics endpoints и `forecast-runs` уже `source/model/horizon`-aware;
+- analytics endpoints и `forecast-runs` уже `model/horizon`-aware; historical и live forecast читаются как единый `forecast`;
 - для bulk historical backfill уже есть режим без outbox: `publish_outbox_events=false` / `--skip-outbox`;
 - есть coverage endpoint по historical forecast: `GET /api/analytics/forecast-coverage`;
 - есть safe rerun / bulk backfill runbook в `docs/backfill_runbook.md`;
