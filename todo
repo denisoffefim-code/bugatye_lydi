@@ -14,7 +14,11 @@
 - есть RBAC с ролями `admin/analyst/viewer` и endpoint-level checks;
 - есть admin-only операции для forecast fetch / station coordinate backfill / service coverage / revoke user sessions;
 - есть smoke-тесты ролей и отказа в доступе;
-- зафиксирован контракт `latest forecast` в коде, тестах и документации.
+- зафиксирован контракт `latest forecast` в коде, тестах и документации;
+- есть production-friendly `Dockerfile`, local `docker-compose` со своим `postgres/redis/kafka` и split env для Docker;
+- есть `skycast.migrate` для отдельного migration job;
+- есть Kubernetes manifests для Yandex Cloud: `ConfigMap`, `Secret` templates, `migration-job`, сервисы, `outbox-worker`, `Ingress`, `HPA`, `PDB`;
+- зафиксирована tagging strategy для образов и базовый YC deploy runbook.
 
 Сейчас в фокусе:
 - Догрузить historical backfill Open-Meteo `previous_runs` по всем станциям с координатами и горизонтам `1..7`.
@@ -45,20 +49,9 @@ P0. Довести backend до рабочего production-like состоян�
 P1. Развертка в Yandex Cloud
 
 5. Container delivery
-- Подготовить production image build для всех сервисов и worker.
 - Настроить публикацию образов в Yandex Container Registry.
-- Зафиксировать versioning/tagging strategy: immutable tags по commit sha и отдельный release tag.
 
 6. Kubernetes manifests для Yandex Cloud
-- Добавить манифесты для `forecast-service`.
-- Добавить манифесты для `telemetry-service`.
-- Добавить манифесты для `analytics-api`.
-- Добавить манифесты для `outbox-worker`.
-- При необходимости добавить манифесты для `migration-job`.
-- Для каждого сервиса подготовить `Deployment`, `Service`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler`.
-- Добавить `Ingress` или Yandex ALB ingress configuration для внешнего входа.
-- Добавить `PodDisruptionBudget`, requests/limits и probes.
-- Отдельно решить, где выполняются миграции: startup migration, отдельный Job или pre-deploy step.
 
 7. Инфраструктурные зависимости в Yandex Cloud
 - Зафиксировать целевую схему с `Managed PostgreSQL`.
@@ -66,14 +59,11 @@ P1. Развертка в Yandex Cloud
 - Зафиксировать целевую схему с `Container Registry`.
 - Зафиксировать целевую схему с `Object Storage`.
 - Зафиксировать целевую схему с `Managed Redis` и/или `Managed Kafka` либо self-hosted transport внутри кластера.
-- Описать хранение секретов: `DATABASE_URL`, CA certificate, Redis/Kafka credentials, auth settings.
 - Подготовить схему сетевого доступа: security groups, internal/external services, egress в Open-Meteo и NOAA.
-- Решить судьбу локального spool в Kubernetes: `emptyDir`, PVC или отключение spool при другой delivery strategy.
 
 8. Эксплуатация и rollout
-- Описать пошаговый deploy в Yandex Cloud: bootstrap infra, apply manifests, migrate DB, smoke checks, rollback.
+- Описать rollback для Yandex Cloud deploy.
 - Описать, как одновременно живут две версии приложения при обновлении schema и worker logic.
-- Добавить post-deploy проверку `/ready` и `/metrics` на всех сервисах.
 - Добавить post-deploy проверку записи телеметрии.
 - Добавить post-deploy проверку запуска загрузки прогноза.
 - Добавить post-deploy проверку доставки одного outbox-сообщения до Redis/Kafka.

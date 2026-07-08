@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - helper tests may run without r
     asyncpg = Any  # type: ignore[assignment]
 
 from skycast.config import settings
+from skycast.config import Settings
 from skycast.logging_utils import configure_logging
 
 if TYPE_CHECKING:
@@ -121,6 +123,32 @@ def load_aiokafka_producer():
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on local env
         raise RuntimeError("aiokafka package is required to run the outbox worker") from exc
     return producer_cls
+
+
+def build_kafka_producer_kwargs(app_settings: Settings) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "bootstrap_servers": app_settings.kafka_bootstrap_servers,
+        "client_id": app_settings.kafka_client_id,
+        "enable_idempotence": True,
+        "security_protocol": app_settings.kafka_security_protocol,
+    }
+    if (
+        app_settings.kafka_ssl_cafile
+        or app_settings.kafka_ssl_certfile
+        or app_settings.kafka_ssl_keyfile
+    ):
+        ssl_context = ssl.create_default_context(cafile=app_settings.kafka_ssl_cafile)
+        if app_settings.kafka_ssl_certfile and app_settings.kafka_ssl_keyfile:
+            ssl_context.load_cert_chain(
+                certfile=app_settings.kafka_ssl_certfile,
+                keyfile=app_settings.kafka_ssl_keyfile,
+            )
+        kwargs["ssl_context"] = ssl_context
+    if app_settings.kafka_security_protocol.startswith("SASL"):
+        kwargs["sasl_mechanism"] = app_settings.kafka_sasl_mechanism
+        kwargs["sasl_plain_username"] = app_settings.kafka_sasl_username
+        kwargs["sasl_plain_password"] = app_settings.kafka_sasl_password
+    return kwargs
 
 
 class LocalOutboxSpool:
@@ -310,11 +338,7 @@ class OutboxPublisher:
         producer_cls = load_aiokafka_producer()
         redis_client = redis_async.from_url(settings.redis_url, decode_responses=True)
         await redis_client.ping()
-        kafka_producer = producer_cls(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            client_id=settings.kafka_client_id,
-            enable_idempotence=True,
-        )
+        kafka_producer = producer_cls(**build_kafka_producer_kwargs(settings))
         try:
             await kafka_producer.start()
         except Exception:

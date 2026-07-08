@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skycast-shared-config
+  namespace: skycast
+data:
+  APP_NAME: SkyCast
+  LOG_LEVEL: INFO
+  LOG_JSON: "true"
+  REQUEST_TIMEOUT_SECONDS: "45"
+  MAX_PARALLEL_REQUESTS: "4"
+  RATE_LIMIT_PER_SECOND: "3"
+  STARTUP_MIGRATE: "false"
+  OUTBOX_BATCH_SIZE: "100"
+  OUTBOX_POLL_SECONDS: "2"
+  OUTBOX_RETRY_BASE_SECONDS: "5"
+  OUTBOX_MAX_RETRY_DELAY_SECONDS: "300"
+  OUTBOX_MAX_ATTEMPTS: "8"
+  OUTBOX_SPOOL_ENABLED: "true"
+  OUTBOX_SPOOL_DIR: /var/lib/skycast/outbox-spool
+  REDIS_STREAM_PREFIX: skycast
+  KAFKA_TOPIC_PREFIX: skycast
+  KAFKA_CLIENT_ID: skycast-outbox-worker
+  KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  OPEN_METEO_BASE_URL: https://api.open-meteo.com
+  OPEN_METEO_PREVIOUS_RUNS_BASE_URL: https://previous-runs-api.open-meteo.com
+  OPEN_METEO_MODEL: best_match
+  NOAA_IGRA_STATION_LIST_URL: https://www.ncei.noaa.gov/pub/data/igra/igra2-station-list.txt
+  AUTH_SESSION_TTL_HOURS: "24"
+  AUTH_PASSWORD_HASH_ITERATIONS: "390000"

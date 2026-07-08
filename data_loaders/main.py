@@ -16,7 +16,7 @@ except ImportError:
 
 
 DB_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/weather")
+    "DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/weather")
 PORT = int(os.getenv("PORT", "8080"))
 
 

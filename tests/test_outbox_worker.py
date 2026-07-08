@@ -3,10 +3,13 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock, patch
 
+from skycast.config import Settings
 from skycast.outbox_worker import (
     LocalOutboxSpool,
     OutboxMessage,
+    build_kafka_producer_kwargs,
     build_kafka_payload,
     build_stream_fields,
     compute_retry_delay_seconds,
@@ -78,6 +81,37 @@ class OutboxWorkerHelpersTests(unittest.TestCase):
         restored = deserialize_outbox_message(serialize_outbox_message(self.message))
 
         self.assertEqual(restored, self.message)
+
+    def test_kafka_producer_kwargs_support_plaintext_defaults(self) -> None:
+        settings = Settings(database_url="postgresql://test", kafka_bootstrap_servers="kafka:9092")
+
+        kwargs = build_kafka_producer_kwargs(settings)
+
+        self.assertEqual(kwargs["bootstrap_servers"], "kafka:9092")
+        self.assertEqual(kwargs["security_protocol"], "PLAINTEXT")
+        self.assertNotIn("ssl_context", kwargs)
+        self.assertNotIn("sasl_mechanism", kwargs)
+
+    def test_kafka_producer_kwargs_support_sasl_ssl(self) -> None:
+        settings = Settings(
+            database_url="postgresql://test",
+            kafka_bootstrap_servers="kafka:9092",
+            kafka_security_protocol="SASL_SSL",
+            kafka_ssl_cafile="C:/certs/yandex-ca.pem",
+            kafka_sasl_mechanism="SCRAM-SHA-512",
+            kafka_sasl_username="user",
+            kafka_sasl_password="password",
+        )
+
+        ssl_context = Mock()
+        with patch("skycast.outbox_worker.ssl.create_default_context", return_value=ssl_context):
+            kwargs = build_kafka_producer_kwargs(settings)
+
+        self.assertEqual(kwargs["security_protocol"], "SASL_SSL")
+        self.assertEqual(kwargs["sasl_mechanism"], "SCRAM-SHA-512")
+        self.assertEqual(kwargs["sasl_plain_username"], "user")
+        self.assertEqual(kwargs["sasl_plain_password"], "password")
+        self.assertIs(kwargs["ssl_context"], ssl_context)
 
     def test_local_spool_writes_reads_and_deletes_message(self) -> None:
         with TemporaryDirectory() as tmp_dir:

@@ -10,6 +10,6 @@ COPY . .
 EXPOSE 8080
 
 ENV PORT=8080
-ENV DATABASE_URL=postgresql://postgres:postgres@localhost:5432/weather
+ENV DATABASE_URL=postgresql://postgres:postgres@postgres:5432/weather
 
 CMD ["python", "main.py"]
