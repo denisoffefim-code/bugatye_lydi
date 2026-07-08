@@ -1,3 +1,4 @@
+from datetime import date
 import unittest
 
 from fastapi import HTTPException
@@ -37,3 +38,14 @@ class StationFilterValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("cannot both be true", ctx.exception.detail)
 
+    async def test_end_date_before_start_date_validation_message_is_stable(self) -> None:
+        from skycast.main import top_errors
+
+        with self.assertRaises(HTTPException) as ctx:
+            await top_errors(
+                start_date=date(2026, 7, 10),
+                end_date=date(2026, 7, 9),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("end_date must be greater than or equal to start_date", ctx.exception.detail)

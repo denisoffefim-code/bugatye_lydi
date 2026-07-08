@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-import asyncpg
+try:
+    import asyncpg
+except ModuleNotFoundError:  # pragma: no cover - helper tests may run without runtime deps
+    asyncpg = None  # type: ignore[assignment]
 
 from skycast.config import Settings
 
@@ -14,6 +17,8 @@ _pool: Optional[asyncpg.Pool] = None
 
 async def init_pool(settings: Settings) -> asyncpg.Pool:
     """Create a shared asyncpg pool."""
+    if asyncpg is None:
+        raise RuntimeError("asyncpg package is required to initialize the database pool")
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(

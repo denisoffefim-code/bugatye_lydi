@@ -91,6 +91,14 @@
 - `ods`: очищенные, дедуплицированные факты и прогнозы;
 - `dm`: витрины под аналитику.
 
+Текущая реализация в репозитории:
+
+- `raw_telemetry_events` для сырых событий телеметрии;
+- `raw_forecast_events` для сырых событий прогноза;
+- `weather_data` и `forecast_values` фактически играют роль `ods`;
+- `dm_forecast_errors` как аналитическая read-витрина поверх последних прогнозов и факта;
+- `service_outbox` и отдельный worker для публикации событий в Redis Streams и Kafka.
+
 Ключевая витрина V1:
 
 - `dm_forecast_errors`
@@ -110,14 +118,22 @@
 - идемпотентность загрузки телеметрии и прогноза;
 - retry/backoff на внешних HTTP-вызовах;
 - liveness/readiness/health endpoints;
-- разделение read и write трафика по сервисам.
+- разделение read и write трафика по сервисам;
+- локальный spool у producer/worker при недоступности очереди.
+
+Текущая реализация дедупликации:
+
+- телеметрия дедуплицируется ключом `telemetry:{wmo_index}:{observation_date}`;
+- прогноз дедуплицируется ключом `forecast:{run_id}:{station_id}:{forecast_date}`;
+- transport-события публикуются из `service_outbox` одновременно в Redis Streams и Kafka;
+- `message_key` сохраняется в обоих transport’ах как downstream dedupe key.
+- при ошибке публикации сообщение дополнительно зеркалируется в локальный spool-каталог и replay'ится после восстановления брокеров.
 
 Следующий шаг после этого коммита:
 
-- вынести запись прогноза и телеметрии в outbox;
-- подключить Redis Streams или Kafka;
-- добавить spool на локальный диск при недоступности очереди;
 - перенести аналитику на отдельные `dm_*` представления.
+- добавить OpenTelemetry tracing;
+- подготовить Kubernetes manifests для Yandex Cloud.
 
 ## Deployment Shape
 
@@ -135,5 +151,5 @@ Dev-среда должна поднимать три контейнера из 
 
 - structured logs;
 - latency/error counters по endpoint;
-- ingest lag / queue lag после появления очереди;
+- ingest lag / queue lag;
 - alerting на недоступность БД и массовые ошибки прогноза.

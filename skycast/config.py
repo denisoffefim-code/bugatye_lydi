@@ -36,6 +36,11 @@ class Settings:
     host: str = os.getenv("APP_HOST", "0.0.0.0")
     port: int = int(os.getenv("APP_PORT", os.getenv("PORT", "8080")))
     database_url: str = os.getenv("DATABASE_URL", "")
+    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    redis_stream_prefix: str = os.getenv("REDIS_STREAM_PREFIX", "skycast")
+    kafka_bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    kafka_topic_prefix: str = os.getenv("KAFKA_TOPIC_PREFIX", "skycast")
+    kafka_client_id: str = os.getenv("KAFKA_CLIENT_ID", "skycast-outbox-worker")
     open_meteo_base_url: str = os.getenv("OPEN_METEO_BASE_URL", "https://api.open-meteo.com")
     open_meteo_model: str = os.getenv("OPEN_METEO_MODEL", "best_match")
     noaa_igra_station_list_url: str = os.getenv(
@@ -46,10 +51,35 @@ class Settings:
     max_parallel_requests: int = int(os.getenv("MAX_PARALLEL_REQUESTS", "4"))
     rate_limit_per_second: float = float(os.getenv("RATE_LIMIT_PER_SECOND", "3"))
     startup_migrate: bool = _get_bool("STARTUP_MIGRATE", True)
+    outbox_batch_size: int = int(os.getenv("OUTBOX_BATCH_SIZE", "100"))
+    outbox_poll_seconds: float = float(os.getenv("OUTBOX_POLL_SECONDS", "2"))
+    outbox_retry_base_seconds: float = float(os.getenv("OUTBOX_RETRY_BASE_SECONDS", "5"))
+    outbox_max_retry_delay_seconds: float = float(os.getenv("OUTBOX_MAX_RETRY_DELAY_SECONDS", "300"))
+    outbox_max_attempts: int = int(os.getenv("OUTBOX_MAX_ATTEMPTS", "8"))
+    outbox_spool_enabled: bool = _get_bool("OUTBOX_SPOOL_ENABLED", True)
+    outbox_spool_dir: str = os.getenv("OUTBOX_SPOOL_DIR", ".skycast-outbox-spool")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_json: bool = _get_bool("LOG_JSON", True)
 
     def validate(self) -> None:
         if not self.database_url:
             raise RuntimeError("DATABASE_URL is required")
+        if not self.redis_url:
+            raise RuntimeError("REDIS_URL is required")
+        if not self.kafka_bootstrap_servers:
+            raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required")
+        if self.outbox_batch_size < 1:
+            raise RuntimeError("OUTBOX_BATCH_SIZE must be >= 1")
+        if self.outbox_poll_seconds <= 0:
+            raise RuntimeError("OUTBOX_POLL_SECONDS must be > 0")
+        if self.outbox_retry_base_seconds <= 0:
+            raise RuntimeError("OUTBOX_RETRY_BASE_SECONDS must be > 0")
+        if self.outbox_max_retry_delay_seconds <= 0:
+            raise RuntimeError("OUTBOX_MAX_RETRY_DELAY_SECONDS must be > 0")
+        if self.outbox_max_attempts < 1:
+            raise RuntimeError("OUTBOX_MAX_ATTEMPTS must be >= 1")
+        if self.outbox_spool_enabled and not self.outbox_spool_dir:
+            raise RuntimeError("OUTBOX_SPOOL_DIR is required when OUTBOX_SPOOL_ENABLED=true")
 
 
 settings = Settings()

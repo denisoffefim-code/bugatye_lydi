@@ -8,6 +8,9 @@ FastAPI-бэкенд для сравнения прогноза погоды с 
 - миграции, которые расширяют существующую схему:
   - координаты и метаданные NOAA у `stations`;
   - `forecast_runs` и `forecast_values` для хранения прогнозов;
+- DB-backed outbox worker, который публикует события одновременно в Redis Streams и Kafka;
+- локальный файловый spool у outbox worker на случай недоступности Redis/Kafka;
+- structured JSON logs и базовые Prometheus-метрики по request/error/lag;
 - API для:
   - просмотра станций;
   - просмотра детали станции и покрытия по таблицам;
@@ -38,6 +41,15 @@ pip install -r requirements.txt
 ```bash
 uvicorn skycast.main:app --reload --port 8080
 ```
+
+Для transport-слоя разработки теперь также нужны Redis, Kafka и отдельный worker:
+
+```bash
+docker compose up --build
+```
+
+Если Redis/Kafka недоступны, `outbox-worker` складывает сообщения в `OUTBOX_SPOOL_DIR` и повторно проигрывает их после восстановления брокеров.
+Логи по умолчанию идут в JSON (`LOG_JSON=true`), а `/metrics` теперь дополнительно показывает ingest lag по `raw_telemetry_events` и `raw_forecast_events`.
 
 ## Загрузка исторических данных
 
@@ -78,6 +90,7 @@ python data_loaders/load_remote.py \
 - `GET /api/analytics/worst-stations`
 - `GET /api/analytics/station-series`
 - `GET /api/analytics/coverage`
+- `GET /metrics`
 
 ## Примеры запросов
 
@@ -107,5 +120,5 @@ curl "http://localhost:8080/api/analytics/top-errors?start_date=2026-07-01&end_d
 
 - добрать координаты для станций, которых нет в NOAA IGRA;
 - вынести загрузку прогнозов и телеметрии в отдельные сервисы/воркеры;
-- добавить Redis/Kafka/outbox для устойчивой очереди;
+- добавить Kubernetes-манифесты и deployment-описание для Yandex Cloud;
 - добавить авторизацию и фронтенд-аналитику.
