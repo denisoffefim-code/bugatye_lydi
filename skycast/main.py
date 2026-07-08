@@ -61,6 +61,13 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
+METRIC_SQL_MAP = {
+    "avg_temp": ("fv.avg_temp", "wd.avg_temp"),
+    "min_temp": ("fv.min_temp", "wd.min_temp"),
+    "max_temp": ("fv.max_temp", "wd.max_temp"),
+    "precipitation": ("fv.precipitation", "wd.precipitation"),
+}
+
 
 async def _fetch_stations_for_forecast(
     conn: asyncpg.Connection,
@@ -209,6 +216,59 @@ async def _finish_forecast_run(
     )
 
 
+def _determine_forecast_run_status(*, saved_rows: int, error_count: int) -> str:
+    if error_count == 0:
+        return "success"
+    if saved_rows > 0:
+        return "partial_failed"
+    return "failed"
+
+
+async def _resolve_station_id(
+    conn: asyncpg.Connection,
+    *,
+    station_id: int | None = None,
+    wmo_index: str | None = None,
+) -> int:
+    if station_id is None and wmo_index is None:
+        raise HTTPException(status_code=400, detail="station_id or wmo_index is required")
+
+    if station_id is not None:
+        exists = await conn.fetchval("SELECT 1 FROM stations WHERE id = $1", station_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"Station with id={station_id} was not found")
+        return station_id
+
+    resolved = await conn.fetchval("SELECT id FROM stations WHERE wmo_index = $1", wmo_index)
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Station with wmo_index={wmo_index} was not found",
+        )
+    return resolved
+
+
+def _latest_forecast_cte(forecast_expr: str) -> str:
+    return f"""
+        WITH latest_forecast AS (
+            SELECT DISTINCT ON (fv.station_id, fv.forecast_date)
+                fv.station_id,
+                fv.forecast_date,
+                fv.horizon_days,
+                fv.latitude,
+                fv.longitude,
+                fr.provider,
+                fr.model,
+                fr.run_at,
+                {forecast_expr} AS forecast_value
+            FROM forecast_values fv
+            JOIN forecast_runs fr ON fr.id = fv.run_id
+            WHERE fr.status IN ('success', 'partial_failed')
+            ORDER BY fv.station_id, fv.forecast_date, fr.run_at DESC
+        )
+    """
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     pool = get_pool()
@@ -223,6 +283,12 @@ async def list_stations(
     missing_coordinates_only: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
+    if with_coordinates_only and missing_coordinates_only:
+        raise HTTPException(
+            status_code=400,
+            detail="with_coordinates_only and missing_coordinates_only cannot both be true",
+        )
+
     clauses: list[str] = []
     if with_coordinates_only:
         clauses.append("latitude IS NOT NULL AND longitude IS NOT NULL")
@@ -256,6 +322,40 @@ async def list_stations(
 
     stations = [dict(row) for row in rows]
     return {"total": total, "returned": len(stations), "stations": stations}
+
+
+@app.get("/api/stations/{station_id}/details")
+async def station_details(station_id: int) -> dict[str, Any]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        station = await conn.fetchrow(
+            """
+            SELECT id, wmo_index, name, country, latitude, longitude,
+                   elevation_m, noaa_station_id, coordinates_updated_at
+            FROM stations
+            WHERE id = $1
+            """,
+            station_id,
+        )
+        if station is None:
+            raise HTTPException(status_code=404, detail=f"Station with id={station_id} was not found")
+
+        stats = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM weather_data WHERE station_id = $1) AS weather_rows,
+                (SELECT MIN(observation_date) FROM weather_data WHERE station_id = $1) AS weather_start_date,
+                (SELECT MAX(observation_date) FROM weather_data WHERE station_id = $1) AS weather_end_date,
+                (SELECT COUNT(*) FROM forecast_values WHERE station_id = $1) AS forecast_rows,
+                (SELECT MIN(forecast_date) FROM forecast_values WHERE station_id = $1) AS forecast_start_date,
+                (SELECT MAX(forecast_date) FROM forecast_values WHERE station_id = $1) AS forecast_end_date,
+                (SELECT COUNT(*) FROM atm8c_data WHERE station_id = $1) AS atm8c_rows,
+                (SELECT COUNT(*) FROM srok8c_data WHERE station_id = $1) AS srok8c_rows
+            """,
+            station_id,
+        )
+
+    return {"station": dict(station), "stats": dict(stats)}
 
 
 @app.post("/api/stations/backfill-coordinates")
@@ -410,90 +510,147 @@ async def fetch_forecasts(request: ForecastFetchRequest) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=settings.request_timeout_seconds)
     rate_limiter = AsyncRateLimiter(settings.rate_limit_per_second)
     pool = get_pool()
+    run_id: int | None = None
 
-    async with pool.acquire() as conn:
-        stations = await _fetch_stations_for_forecast(conn, request)
-        if not stations:
-            raise HTTPException(status_code=400, detail="No stations with coordinates matched the request")
-        run_id = await _create_forecast_run(conn, request, len(stations))
+    try:
+        async with pool.acquire() as conn:
+            stations = await _fetch_stations_for_forecast(conn, request)
+            if not stations:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No stations with coordinates matched the request",
+                )
+            run_id = await _create_forecast_run(conn, request, len(stations))
 
-    station_queue: asyncio.Queue[asyncpg.Record] = asyncio.Queue()
-    for station in stations:
-        station_queue.put_nowait(station)
+        station_queue: asyncio.Queue[asyncpg.Record] = asyncio.Queue()
+        for station in stations:
+            station_queue.put_nowait(station)
 
-    saved_rows = 0
-    errors: list[str] = []
-    saved_lock = asyncio.Lock()
-    error_lock = asyncio.Lock()
+        saved_rows = 0
+        errors: list[str] = []
+        saved_lock = asyncio.Lock()
+        error_lock = asyncio.Lock()
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async def worker() -> None:
-            nonlocal saved_rows
-            while True:
-                try:
-                    station = station_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    return
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async def worker() -> None:
+                nonlocal saved_rows
+                while True:
+                    try:
+                        station = station_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
 
-                try:
-                    await rate_limiter.wait()
-                    records, payload = await with_retries(
-                        lambda: fetch_open_meteo_forecast(
-                            session,
-                            base_url=settings.open_meteo_base_url,
-                            latitude=station["latitude"],
-                            longitude=station["longitude"],
-                            start_date=request.start_date,
-                            end_date=request.end_date,
-                            model=request.model,
+                    try:
+                        await rate_limiter.wait()
+                        records, _payload = await with_retries(
+                            lambda: fetch_open_meteo_forecast(
+                                session,
+                                base_url=settings.open_meteo_base_url,
+                                latitude=station["latitude"],
+                                longitude=station["longitude"],
+                                start_date=request.start_date,
+                                end_date=request.end_date,
+                                model=request.model,
+                            )
                         )
-                    )
-                    prepared = [
-                        {
-                            "forecast_date": record.forecast_date,
-                            "horizon_days": record.horizon_days,
-                            "avg_temp": record.avg_temp,
-                            "min_temp": record.min_temp,
-                            "max_temp": record.max_temp,
-                            "precipitation": record.precipitation,
-                            "max_wind_speed": record.max_wind_speed,
-                            "raw_payload": None,
-                        }
-                        for record in records
-                    ]
-                    async with pool.acquire() as conn:
-                        await _save_forecast_values(conn, run_id, station, prepared)
-                    async with saved_lock:
-                        saved_rows += len(prepared)
-                except Exception as exc:  # pragma: no cover - defensive endpoint path
-                    async with error_lock:
-                        errors.append(f"{station['wmo_index']}: {exc}")
-                finally:
-                    station_queue.task_done()
+                        prepared = [
+                            {
+                                "forecast_date": record.forecast_date,
+                                "horizon_days": record.horizon_days,
+                                "avg_temp": record.avg_temp,
+                                "min_temp": record.min_temp,
+                                "max_temp": record.max_temp,
+                                "precipitation": record.precipitation,
+                                "max_wind_speed": record.max_wind_speed,
+                                "raw_payload": None,
+                            }
+                            for record in records
+                        ]
+                        async with pool.acquire() as conn:
+                            await _save_forecast_values(conn, run_id, station, prepared)
+                        async with saved_lock:
+                            saved_rows += len(prepared)
+                    except Exception as exc:  # pragma: no cover - defensive endpoint path
+                        async with error_lock:
+                            errors.append(f"{station['wmo_index']}: {exc}")
+                    finally:
+                        station_queue.task_done()
 
-        workers = [
-            asyncio.create_task(worker())
-            for _ in range(min(settings.max_parallel_requests, len(stations)))
-        ]
-        await station_queue.join()
-        for worker_task in workers:
-            await worker_task
+            workers = [
+                asyncio.create_task(worker())
+                for _ in range(min(settings.max_parallel_requests, len(stations)))
+            ]
+            await station_queue.join()
+            for worker_task in workers:
+                await worker_task
 
+        async with pool.acquire() as conn:
+            await _finish_forecast_run(
+                conn,
+                run_id,
+                status=_determine_forecast_run_status(
+                    saved_rows=saved_rows,
+                    error_count=len(errors),
+                ),
+                error_message="\n".join(errors[:20]) if errors else None,
+            )
+
+        return {
+            "run_id": run_id,
+            "stations_requested": len(stations),
+            "forecast_rows_saved": saved_rows,
+            "failed_stations": len(errors),
+            "errors": errors[:20],
+        }
+    except Exception as exc:
+        if run_id is not None:
+            async with pool.acquire() as conn:
+                await _finish_forecast_run(conn, run_id, status="failed", error_message=str(exc))
+        raise
+
+
+@app.get("/api/forecast-runs")
+async def list_forecast_runs(
+    limit: int = Query(default=20, ge=1, le=200),
+    status: str | None = None,
+) -> dict[str, Any]:
+    clauses = []
+    args: list[Any] = []
+    if status:
+        clauses.append(f"fr.status = ${len(args) + 1}")
+        args.append(status)
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    args.append(limit)
+
+    pool = get_pool()
     async with pool.acquire() as conn:
-        await _finish_forecast_run(
-            conn,
-            run_id,
-            status="partial_failed" if errors else "success",
-            error_message="\n".join(errors[:20]) if errors else None,
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                fr.id,
+                fr.provider,
+                fr.model,
+                fr.status,
+                fr.run_at,
+                fr.requested_start_date,
+                fr.requested_end_date,
+                fr.requested_station_count,
+                fr.created_at,
+                fr.completed_at,
+                fr.error_message,
+                COUNT(fv.id) AS saved_rows,
+                COUNT(DISTINCT fv.station_id) AS saved_stations
+            FROM forecast_runs fr
+            LEFT JOIN forecast_values fv ON fv.run_id = fr.id
+            {where_sql}
+            GROUP BY fr.id
+            ORDER BY fr.run_at DESC
+            LIMIT ${len(args)}
+            """,
+            *args,
         )
-
-    return {
-        "run_id": run_id,
-        "stations_requested": len(stations),
-        "forecast_rows_saved": saved_rows,
-        "failed_stations": len(errors),
-        "errors": errors[:20],
-    }
+    return {"returned": len(rows), "runs": [dict(row) for row in rows]}
 
 
 @app.get("/api/analytics/top-errors")
@@ -504,34 +661,16 @@ async def top_errors(
     limit: int = Query(default=20, ge=1, le=200),
     only_with_coordinates: bool = True,
 ) -> dict[str, Any]:
-    metric_map = {
-        "avg_temp": ("fv.avg_temp", "wd.avg_temp"),
-        "min_temp": ("fv.min_temp", "wd.min_temp"),
-        "max_temp": ("fv.max_temp", "wd.max_temp"),
-        "precipitation": ("fv.precipitation", "wd.precipitation"),
-    }
-    forecast_expr, actual_expr = metric_map[metric]
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    forecast_expr, actual_expr = METRIC_SQL_MAP[metric]
     coordinates_filter = ""
     if only_with_coordinates:
         coordinates_filter = "AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL"
 
     query = f"""
-        WITH latest_forecast AS (
-            SELECT DISTINCT ON (fv.station_id, fv.forecast_date)
-                fv.station_id,
-                fv.forecast_date,
-                fv.horizon_days,
-                fv.latitude,
-                fv.longitude,
-                fr.provider,
-                fr.model,
-                fr.run_at,
-                {forecast_expr} AS forecast_value
-            FROM forecast_values fv
-            JOIN forecast_runs fr ON fr.id = fv.run_id
-            WHERE fv.forecast_date BETWEEN $1 AND $2
-            ORDER BY fv.station_id, fv.forecast_date, fr.run_at DESC
-        )
+        {_latest_forecast_cte(forecast_expr)}
         SELECT
             s.id AS station_id,
             s.wmo_index,
@@ -555,6 +694,7 @@ async def top_errors(
         JOIN stations s
             ON s.id = lf.station_id
         WHERE lf.forecast_value IS NOT NULL
+          AND lf.forecast_date BETWEEN $1 AND $2
           AND {actual_expr} IS NOT NULL
           {coordinates_filter}
         ORDER BY absolute_error DESC, lf.forecast_date DESC
@@ -574,6 +714,207 @@ async def top_errors(
     }
 
 
+@app.get("/api/analytics/summary")
+async def analytics_summary(
+    start_date: date,
+    end_date: date,
+    only_with_coordinates: bool = True,
+) -> dict[str, Any]:
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    coordinates_filter = ""
+    if only_with_coordinates:
+        coordinates_filter = "AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL"
+
+    pool = get_pool()
+    metrics: dict[str, Any] = {}
+    async with pool.acquire() as conn:
+        for metric, (forecast_expr, actual_expr) in METRIC_SQL_MAP.items():
+            row = await conn.fetchrow(
+                f"""
+                {_latest_forecast_cte(forecast_expr)}
+                SELECT
+                    COUNT(*) AS compared_points,
+                    ROUND(AVG(ABS((lf.forecast_value - {actual_expr})::numeric)), 2) AS mae,
+                    ROUND(SQRT(AVG(POWER((lf.forecast_value - {actual_expr})::numeric, 2))), 2) AS rmse,
+                    ROUND(AVG((lf.forecast_value - {actual_expr})::numeric), 2) AS bias,
+                    ROUND(MAX(ABS((lf.forecast_value - {actual_expr})::numeric)), 2) AS max_absolute_error
+                FROM latest_forecast lf
+                JOIN weather_data wd
+                    ON wd.station_id = lf.station_id
+                   AND wd.observation_date = lf.forecast_date
+                JOIN stations s
+                    ON s.id = lf.station_id
+                WHERE lf.forecast_date BETWEEN $1 AND $2
+                  AND lf.forecast_value IS NOT NULL
+                  AND {actual_expr} IS NOT NULL
+                  {coordinates_filter}
+                """,
+                start_date,
+                end_date,
+            )
+            metrics[metric] = dict(row)
+
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM stations) AS stations_total,
+                (SELECT COUNT(*) FROM weather_data WHERE observation_date BETWEEN $1 AND $2) AS actual_rows,
+                (SELECT COUNT(*) FROM forecast_values WHERE forecast_date BETWEEN $1 AND $2) AS forecast_rows,
+                (SELECT COUNT(*) FROM atm8c_data) AS atm8c_rows,
+                (SELECT COUNT(*) FROM srok8c_data) AS srok8c_rows
+            """,
+            start_date,
+            end_date,
+        )
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "metrics": metrics,
+        "totals": dict(totals),
+    }
+
+
+@app.get("/api/analytics/worst-stations")
+async def worst_stations(
+    start_date: date,
+    end_date: date,
+    metric: Literal["avg_temp", "min_temp", "max_temp", "precipitation"] = "avg_temp",
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, Any]:
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    forecast_expr, actual_expr = METRIC_SQL_MAP[metric]
+    query = f"""
+        {_latest_forecast_cte(forecast_expr)}
+        SELECT
+            s.id AS station_id,
+            s.wmo_index,
+            s.name,
+            s.country,
+            s.latitude,
+            s.longitude,
+            COUNT(*) AS compared_points,
+            ROUND(AVG(ABS((lf.forecast_value - {actual_expr})::numeric)), 2) AS mae,
+            ROUND(MAX(ABS((lf.forecast_value - {actual_expr})::numeric)), 2) AS max_absolute_error
+        FROM latest_forecast lf
+        JOIN weather_data wd
+            ON wd.station_id = lf.station_id
+           AND wd.observation_date = lf.forecast_date
+        JOIN stations s
+            ON s.id = lf.station_id
+        WHERE lf.forecast_date BETWEEN $1 AND $2
+          AND lf.forecast_value IS NOT NULL
+          AND {actual_expr} IS NOT NULL
+        GROUP BY s.id, s.wmo_index, s.name, s.country, s.latitude, s.longitude
+        ORDER BY mae DESC NULLS LAST, max_absolute_error DESC NULLS LAST
+        LIMIT $3
+    """
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, start_date, end_date, limit)
+
+    return {
+        "metric": metric,
+        "start_date": start_date,
+        "end_date": end_date,
+        "returned": len(rows),
+        "items": [dict(row) for row in rows],
+    }
+
+
+@app.get("/api/analytics/station-series")
+async def station_series(
+    start_date: date,
+    end_date: date,
+    station_id: int | None = None,
+    wmo_index: str | None = None,
+) -> dict[str, Any]:
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        resolved_station_id = await _resolve_station_id(
+            conn,
+            station_id=station_id,
+            wmo_index=wmo_index,
+        )
+
+        station = await conn.fetchrow(
+            """
+            SELECT id, wmo_index, name, country, latitude, longitude
+            FROM stations
+            WHERE id = $1
+            """,
+            resolved_station_id,
+        )
+
+        rows = await conn.fetch(
+            """
+            WITH latest_forecast AS (
+                SELECT DISTINCT ON (fv.forecast_date)
+                    fv.forecast_date,
+                    fv.horizon_days,
+                    fr.provider,
+                    fr.model,
+                    fr.run_at,
+                    fv.avg_temp AS forecast_avg_temp,
+                    fv.min_temp AS forecast_min_temp,
+                    fv.max_temp AS forecast_max_temp,
+                    fv.precipitation AS forecast_precipitation,
+                    fv.max_wind_speed AS forecast_max_wind_speed
+                FROM forecast_values fv
+                JOIN forecast_runs fr ON fr.id = fv.run_id
+                WHERE fv.station_id = $1
+                  AND fr.status IN ('success', 'partial_failed')
+                  AND fv.forecast_date BETWEEN $2 AND $3
+                ORDER BY fv.forecast_date, fr.run_at DESC
+            )
+            SELECT
+                wd.observation_date,
+                lf.provider,
+                lf.model,
+                lf.run_at,
+                lf.horizon_days,
+                wd.avg_temp AS actual_avg_temp,
+                lf.forecast_avg_temp,
+                ROUND((lf.forecast_avg_temp - wd.avg_temp)::numeric, 2) AS error_avg_temp,
+                wd.min_temp AS actual_min_temp,
+                lf.forecast_min_temp,
+                ROUND((lf.forecast_min_temp - wd.min_temp)::numeric, 2) AS error_min_temp,
+                wd.max_temp AS actual_max_temp,
+                lf.forecast_max_temp,
+                ROUND((lf.forecast_max_temp - wd.max_temp)::numeric, 2) AS error_max_temp,
+                wd.precipitation AS actual_precipitation,
+                lf.forecast_precipitation,
+                ROUND((lf.forecast_precipitation - wd.precipitation)::numeric, 2) AS error_precipitation,
+                lf.forecast_max_wind_speed
+            FROM weather_data wd
+            LEFT JOIN latest_forecast lf
+                ON lf.forecast_date = wd.observation_date
+            WHERE wd.station_id = $1
+              AND wd.observation_date BETWEEN $2 AND $3
+            ORDER BY wd.observation_date
+            """,
+            resolved_station_id,
+            start_date,
+            end_date,
+        )
+
+    return {
+        "station": dict(station),
+        "start_date": start_date,
+        "end_date": end_date,
+        "returned": len(rows),
+        "items": [dict(row) for row in rows],
+    }
+
+
 @app.get("/api/analytics/coverage")
 async def analytics_coverage() -> dict[str, Any]:
     pool = get_pool()
@@ -585,7 +926,14 @@ async def analytics_coverage() -> dict[str, Any]:
                 (SELECT COUNT(*) FROM stations WHERE latitude IS NOT NULL AND longitude IS NOT NULL)
                     AS stations_with_coordinates,
                 (SELECT COUNT(*) FROM forecast_runs) AS forecast_runs_total,
-                (SELECT COUNT(*) FROM forecast_values) AS forecast_values_total
+                (SELECT COUNT(*) FROM forecast_values) AS forecast_values_total,
+                (SELECT COUNT(*) FROM weather_data) AS weather_rows_total,
+                (SELECT COUNT(*) FROM atm8c_data) AS atm8c_rows_total,
+                (SELECT COUNT(*) FROM srok8c_data) AS srok8c_rows_total,
+                (SELECT MIN(observation_date) FROM weather_data) AS weather_start_date,
+                (SELECT MAX(observation_date) FROM weather_data) AS weather_end_date,
+                (SELECT MIN(forecast_date) FROM forecast_values) AS forecast_start_date,
+                (SELECT MAX(forecast_date) FROM forecast_values) AS forecast_end_date
             """
         )
     return dict(row)
