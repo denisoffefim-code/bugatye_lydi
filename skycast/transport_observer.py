@@ -210,7 +210,7 @@ async def run_transport_observer() -> None:
 
 
 def main() -> None:
-    configure_logging(json_logs=settings.log_json, level=settings.log_level)
+    configure_logging(service_name=settings.app_name, json_logs=settings.log_json, level=settings.log_level)
     asyncio.run(run_transport_observer())
 
 

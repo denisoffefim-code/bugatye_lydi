@@ -16,16 +16,72 @@ spec:
   ingressClassName: gwin-default
   defaultBackend:
     service:
-      name: analytics-api
+      name: skycast-frontend
       port:
         number: 80
   rules:
     - http:
         paths:
-          - path: /
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: analytics-api
+                port:
+                  number: 80
+          - path: /live
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /ready
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /openapi.json
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /redoc
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-api
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: skycast-frontend
                 port:
                   number: 80

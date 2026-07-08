@@ -159,7 +159,7 @@ export function AnalyticsPage() {
         successCount += 1;
       } else {
         setCoverage(null);
-        nextWarnings.push(`Покрытие прогноза недоступно: ${formatApiError(primaryResults[1].reason)}`);
+        nextWarnings.push(`Сводка по вариантам прогноза недоступна: ${formatApiError(primaryResults[1].reason)}`);
       }
 
       if (secondaryResults[0].status === "fulfilled") {
@@ -223,52 +223,64 @@ export function AnalyticsPage() {
         <div>
           <span>Аналитика</span>
           <h1>Разбор точности прогноза</h1>
-          <p>Выберите период и параметры, затем по кнопке получите сводку, ключевые выводы, худшие станции и ежедневную динамику.</p>
+          <p>Выберите период и параметры, затем запустите анализ, чтобы увидеть ключевые выводы, проблемные станции и ежедневную динамику.</p>
         </div>
       </div>
 
       <form
-        className="filterPanel"
+        className="analysisForm"
         onSubmit={(event) => {
           event.preventDefault();
           void runAnalytics({ ...filters, model: filters.model.trim() });
         }}
       >
-        <label>
-          <span>Станция для графика</span>
-          <select value={filters.stationId} onChange={(event) => updateFilter("stationId", event.target.value ? Number(event.target.value) : "")}>
-            <option value="">Без станции</option>
-            {stations.map((station) => (
-              <option key={station.id} value={station.id}>
-                {station.name} · {station.wmo_index}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>С даты</span>
-          <input type="date" value={filters.startDate} onChange={(event) => updateFilter("startDate", event.target.value)} />
-        </label>
-        <label>
-          <span>По дату</span>
-          <input type="date" value={filters.endDate} onChange={(event) => updateFilter("endDate", event.target.value)} />
-        </label>
-        <label>
-          <span>Метрика</span>
-          <select value={filters.metric} onChange={(event) => updateFilter("metric", event.target.value as Metric)}>
-            <option value="avg_temp">Средняя температура</option>
-            <option value="min_temp">Минимальная температура</option>
-            <option value="max_temp">Максимальная температура</option>
-            <option value="precipitation">Осадки</option>
-          </select>
-        </label>
-        <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
-          <SlidersHorizontal size={17} />
-          Дополнительно
-        </button>
+        <div className="filterPanel mainFilters">
+          <label>
+            <span>Станция для графика</span>
+            <select value={filters.stationId} onChange={(event) => updateFilter("stationId", event.target.value ? Number(event.target.value) : "")}>
+              <option value="">Без станции</option>
+              {stations.map((station) => (
+                <option key={station.id} value={station.id}>
+                  {station.name} · {station.wmo_index}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>С даты</span>
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter("startDate", event.target.value)} />
+          </label>
+          <label>
+            <span>По дату</span>
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter("endDate", event.target.value)} />
+          </label>
+          <label>
+            <span>Метрика</span>
+            <select value={filters.metric} onChange={(event) => updateFilter("metric", event.target.value as Metric)}>
+              <option value="avg_temp">Средняя температура</option>
+              <option value="min_temp">Минимальная температура</option>
+              <option value="max_temp">Максимальная температура</option>
+              <option value="precipitation">Осадки</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="formActions">
+          <button className="primaryButton analysisButton" type="submit" disabled={loading}>
+            <BarChart3 size={18} />
+            {loading ? "Строим анализ" : "Показать анализ"}
+          </button>
+          <button className="ghostButton" type="button" onClick={handleReset} disabled={loading}>
+            Сбросить
+          </button>
+          <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+            <SlidersHorizontal size={17} />
+            Дополнительные параметры
+          </button>
+        </div>
 
         {showAdvanced ? (
-          <>
+          <div className="filterPanel advancedPanel">
             <label>
               <span>Модель</span>
               <div className="inputShell">
@@ -287,18 +299,8 @@ export function AnalyticsPage() {
                 ))}
               </select>
             </label>
-          </>
+          </div>
         ) : null}
-
-        <div className="formActions">
-          <button className="primaryButton" type="submit" disabled={loading}>
-            <BarChart3 size={18} />
-            {loading ? "Строим анализ" : "Показать анализ"}
-          </button>
-          <button className="ghostButton" type="button" onClick={handleReset} disabled={loading}>
-            Сбросить
-          </button>
-        </div>
       </form>
 
       {loading ? <SkeletonGrid cards={4} /> : null}
@@ -343,9 +345,9 @@ export function AnalyticsPage() {
             />
             <MetricCard
               icon={Radar}
-              label="Покрытие прогноза"
+              label="Вариантов прогноза"
               value={formatNumber(coverage?.returned ?? 0)}
-              hint={fullestDataset ? `${fullestDataset.model}, ${fullestDataset.horizon_days} дн.` : "нет покрытых наборов"}
+              hint={fullestDataset ? `${fullestDataset.model}, ${fullestDataset.horizon_days} дн.` : "варианты не выделяются"}
               tone="coral"
             />
           </div>
@@ -543,8 +545,8 @@ export function AnalyticsPage() {
             <article className="panel">
               <div className="panelHeader">
                 <div>
-                  <span>Покрытие</span>
-                  <h2>Какие прогнозы реально доступны</h2>
+                  <span>Варианты</span>
+                  <h2>Какие сценарии участвуют в разборе</h2>
                 </div>
               </div>
               {coverage?.items.length ? (
@@ -575,7 +577,7 @@ export function AnalyticsPage() {
                   </table>
                 </div>
               ) : (
-                <EmptyState title="Покрытие пусто" text="Прогнозные наборы за выбранный период не найдены." />
+                <EmptyState title="Варианты не найдены" text="Для выбранного периода сервис не вернул вариантов прогноза для анализа." />
               )}
             </article>
           </div>

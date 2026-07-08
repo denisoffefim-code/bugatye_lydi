@@ -1,4 +1,4 @@
-import { CalendarDays, CloudSun, Eye, MapPin, Search, ThermometerSun } from "lucide-react";
+import { BarChart3, CalendarDays, CloudRain, Eye, MapPin, Search, SlidersHorizontal, ThermometerSun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "../api/client";
 import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../components/DataState";
@@ -7,32 +7,51 @@ import { Modal } from "../components/Modal";
 import type { Station, StationDetailsResponse, StationSeriesItem, StationSeriesResponse } from "../types";
 import { defaultRange, formatDate, formatNumber } from "../utils";
 
+interface ObservationFilters {
+  stationId: number | "";
+  startDate: string;
+  endDate: string;
+  search: string;
+}
+
 export function ObservationsPage() {
   const range = useMemo(() => defaultRange(7), []);
   const [stations, setStations] = useState<Station[]>([]);
-  const [selectedStation, setSelectedStation] = useState<number | "">("");
   const [details, setDetails] = useState<StationDetailsResponse | null>(null);
   const [series, setSeries] = useState<StationSeriesResponse | null>(null);
   const [selectedObservation, setSelectedObservation] = useState<StationSeriesItem | null>(null);
-  const [startDate, setStartDate] = useState(range.start);
-  const [endDate, setEndDate] = useState(range.end);
-  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<ObservationFilters>({
+    stationId: "",
+    startDate: range.start,
+    endDate: range.end,
+    search: ""
+  });
+  const [activeFilters, setActiveFilters] = useState<ObservationFilters | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [hasAttemptedAnalysis, setHasAttemptedAnalysis] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
     let active = true;
+
     async function loadStations() {
       setLoading(true);
       setError(null);
       try {
         const response = await api.stations({ limit: 500 });
-        if (active) {
-          setStations(response.stations);
-          setSelectedStation(response.stations[0]?.id || "");
+        if (!active) {
+          return;
         }
+
+        setStations(response.stations);
+        setFilters((current) => ({
+          ...current,
+          stationId: current.stationId || response.stations[0]?.id || ""
+        }));
       } catch (err) {
         if (active) {
           setError(formatApiError(err));
@@ -43,49 +62,67 @@ export function ObservationsPage() {
         }
       }
     }
+
     void loadStations();
     return () => {
       active = false;
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedStation) {
-      setSeries(null);
-      setDetails(null);
+  function updateFilter<K extends keyof ObservationFilters>(key: K, value: ObservationFilters[K]) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  async function runAnalysis(query: ObservationFilters) {
+    if (!query.stationId) {
+      setAnalysisError("Сначала выберите станцию.");
       return;
     }
-    let active = true;
-    async function loadSeries() {
-      setSeriesLoading(true);
-      setSeriesError(null);
-      try {
-        const [seriesResponse, detailsResponse] = await Promise.all([
-          api.stationSeries({ station_id: Number(selectedStation), start_date: startDate, end_date: endDate }),
-          api.stationDetails(Number(selectedStation))
-        ]);
-        if (active) {
-          setSeries(seriesResponse);
-          setDetails(detailsResponse);
-        }
-      } catch (err) {
-        if (active) {
-          setSeriesError(formatApiError(err));
-        }
-      } finally {
-        if (active) {
-          setSeriesLoading(false);
-        }
-      }
+    if (query.endDate < query.startDate) {
+      setAnalysisError("Дата окончания должна быть не раньше даты начала.");
+      return;
     }
-    void loadSeries();
-    return () => {
-      active = false;
-    };
-  }, [endDate, selectedStation, startDate]);
+
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    setHasAttemptedAnalysis(true);
+    setSelectedObservation(null);
+
+    try {
+      const [seriesResponse, detailsResponse] = await Promise.all([
+        api.stationSeries({ station_id: Number(query.stationId), start_date: query.startDate, end_date: query.endDate }),
+        api.stationDetails(Number(query.stationId))
+      ]);
+      setSeries(seriesResponse);
+      setDetails(detailsResponse);
+      setActiveFilters(query);
+      setHasLoaded(true);
+    } catch (err) {
+      setAnalysisError(formatApiError(err));
+    } finally {
+      setAnalysisLoading(false);
+    }
+  }
+
+  function handleReset() {
+    setFilters({
+      stationId: stations[0]?.id || "",
+      startDate: range.start,
+      endDate: range.end,
+      search: ""
+    });
+    setActiveFilters(null);
+    setSeries(null);
+    setDetails(null);
+    setSelectedObservation(null);
+    setAnalysisError(null);
+    setHasAttemptedAnalysis(false);
+    setHasLoaded(false);
+    setShowAdvanced(false);
+  }
 
   const actualRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const query = activeFilters?.search.trim().toLowerCase() || "";
     return (series?.items || []).filter((item) => {
       const hasActual =
         item.actual_avg_temp !== null ||
@@ -101,67 +138,130 @@ export function ObservationsPage() {
       const text = `${item.observation_date} ${series?.station.name || ""} ${series?.station.wmo_index || ""}`.toLowerCase();
       return text.includes(query);
     });
-  }, [search, series?.items, series?.station.name, series?.station.wmo_index]);
+  }, [activeFilters?.search, series?.items, series?.station.name, series?.station.wmo_index]);
 
   const station = details?.station;
-  const stats = details?.stats || {};
+  const averageTempValues = actualRows
+    .map((item) => item.actual_avg_temp)
+    .filter((value): value is number => value !== null && value !== undefined);
+  const averageTemp = averageTempValues.length
+    ? averageTempValues.reduce((sum, value) => sum + value, 0) / averageTempValues.length
+    : null;
+  const rainyDays = actualRows.filter((item) => Number(item.actual_precipitation || 0) > 0).length;
+  const temperatureSpan = actualRows
+    .map((item) => {
+      if (item.actual_min_temp === null || item.actual_max_temp === null) {
+        return null;
+      }
+      return item.actual_max_temp - item.actual_min_temp;
+    })
+    .filter((value): value is number => value !== null);
+  const maxSpan = temperatureSpan.length ? Math.max(...temperatureSpan) : null;
 
   return (
     <section className="pageStack">
       <div className="pageHeader">
         <div>
           <span>Фактическая погода</span>
-          <h1>Наблюдения по станциям</h1>
-          <p>Выберите город или станцию и период, чтобы увидеть реальную погоду.</p>
+          <h1>Анализ наблюдений по станциям</h1>
+          <p>Выберите станцию и период, чтобы посмотреть фактическую погоду по дням.</p>
         </div>
       </div>
 
-      <div className="filterPanel">
-        <label>
-          <span>Город или станция</span>
-          <select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value ? Number(event.target.value) : "")}>
+      <form
+        className="analysisForm"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void runAnalysis(filters);
+        }}
+      >
+        <div className="filterPanel mainFilters">
+          <label>
+            <span>Город или станция</span>
+            <select value={filters.stationId} onChange={(event) => updateFilter("stationId", event.target.value ? Number(event.target.value) : "")}>
               <option value="">Не выбрано</option>
-            {stations.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} · {item.wmo_index}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>С даты</span>
-          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
-        </label>
-        <label>
-          <span>По дату</span>
-          <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
-        </label>
-        <label>
-          <span>Поиск</span>
-          <div className="inputShell">
-            <Search size={17} />
-            <input placeholder="Дата или название" value={search} onChange={(event) => setSearch(event.target.value)} />
+              {stations.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {item.wmo_index}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>С даты</span>
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter("startDate", event.target.value)} />
+          </label>
+          <label>
+            <span>По дату</span>
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter("endDate", event.target.value)} />
+          </label>
+        </div>
+
+        <div className="formActions">
+          <button className="primaryButton analysisButton" type="submit" disabled={loading || analysisLoading}>
+            <BarChart3 size={18} />
+            {analysisLoading ? "Строим анализ" : "Показать анализ"}
+          </button>
+          <button className="ghostButton" type="button" onClick={handleReset} disabled={analysisLoading}>
+            Сбросить
+          </button>
+          <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+            <SlidersHorizontal size={17} />
+            Дополнительные параметры
+          </button>
+        </div>
+
+        {showAdvanced ? (
+          <div className="filterPanel advancedPanel">
+            <label>
+              <span>Поиск внутри периода</span>
+              <div className="inputShell">
+                <Search size={17} />
+                <input placeholder="Дата или часть названия станции" value={filters.search} onChange={(event) => updateFilter("search", event.target.value)} />
+              </div>
+            </label>
           </div>
-        </label>
-      </div>
+        ) : null}
+      </form>
 
       {loading ? <SkeletonGrid cards={3} /> : null}
       {error ? <ErrorState text={error} /> : null}
+      {analysisError ? <ErrorState text={analysisError} /> : null}
 
-      {!loading && !error ? (
+      {!loading && !error && !hasAttemptedAnalysis ? (
+        <EmptyState title="Анализ еще не запущен" text="Выберите параметры выше и нажмите «Показать анализ»." />
+      ) : null}
+
+      {!loading && !error && hasAttemptedAnalysis && (analysisLoading || hasLoaded) ? (
         <>
-          <div className="metricGrid">
-            <MetricCard icon={MapPin} label="Выбрано" value={station?.wmo_index || "не выбрано"} hint={station?.name} tone="blue" />
-            <MetricCard
-              icon={CalendarDays}
-              label="Период наблюдений"
-              value={`${formatDate(String(stats.weather_start_date || ""))}`}
-              hint={`до ${formatDate(String(stats.weather_end_date || ""))}`}
-              tone="green"
-            />
-            <MetricCard icon={ThermometerSun} label="Наблюдений" value={formatNumber(stats.weather_rows)} tone="amber" />
-            <MetricCard icon={CloudSun} label="Прогнозных записей" value={formatNumber(stats.forecast_rows)} tone="coral" />
-          </div>
+          {analysisLoading ? (
+            <SkeletonGrid cards={4} />
+          ) : (
+            <div className="metricGrid">
+              <MetricCard icon={MapPin} label="Станция" value={station?.wmo_index || "не выбрано"} hint={station?.name} tone="blue" />
+              <MetricCard
+                icon={CalendarDays}
+                label="Дней в выборке"
+                value={formatNumber(actualRows.length)}
+                hint={activeFilters ? `${formatDate(activeFilters.startDate)} - ${formatDate(activeFilters.endDate)}` : "период не задан"}
+                tone="green"
+              />
+              <MetricCard
+                icon={ThermometerSun}
+                label="Средняя температура"
+                value={averageTemp === null ? "нет данных" : `${formatNumber(averageTemp, 1)} °C`}
+                hint={maxSpan === null ? "суточный диапазон не рассчитан" : `макс. суточный разброс ${formatNumber(maxSpan, 1)} °C`}
+                tone="amber"
+              />
+              <MetricCard
+                icon={CloudRain}
+                label="Дней с осадками"
+                value={formatNumber(rainyDays)}
+                hint={rainyDays ? "зафиксированы осадки" : "осадки не выделяются"}
+                tone="coral"
+              />
+            </div>
+          )}
 
           <article className="panel">
             <div className="panelHeader">
@@ -172,10 +272,9 @@ export function ObservationsPage() {
               <ThermometerSun size={20} />
             </div>
 
-            {seriesLoading ? <LoadingPanel /> : null}
-            {seriesError ? <ErrorState text={seriesError} /> : null}
+            {analysisLoading ? <LoadingPanel text="Получаем фактические наблюдения" /> : null}
 
-            {!seriesLoading && !seriesError && actualRows.length ? (
+            {!analysisLoading && hasLoaded && actualRows.length ? (
               <div className="tableScroll">
                 <table>
                   <thead>
@@ -197,12 +296,7 @@ export function ObservationsPage() {
                         <td>{formatNumber(item.actual_max_temp, 1)} °C</td>
                         <td>{formatNumber(item.actual_precipitation, 1)} мм</td>
                         <td>
-                          <button
-                            className="iconButton"
-                            type="button"
-                            onClick={() => setSelectedObservation(item)}
-                            aria-label="Открыть детали"
-                          >
+                          <button className="iconButton" type="button" onClick={() => setSelectedObservation(item)} aria-label="Открыть детали">
                             <Eye size={17} />
                           </button>
                         </td>
@@ -213,8 +307,8 @@ export function ObservationsPage() {
               </div>
             ) : null}
 
-            {!seriesLoading && !seriesError && !actualRows.length ? (
-              <EmptyState title="Наблюдения не найдены" text="Для выбранной станции и периода нет фактических погодных записей." />
+            {!analysisLoading && hasLoaded && !actualRows.length ? (
+              <EmptyState title="Наблюдения не найдены" text="Для выбранной станции и периода сервис не вернул фактических наблюдений." />
             ) : null}
           </article>
         </>

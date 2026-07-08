@@ -1,11 +1,9 @@
 import {
   BarChart3,
   CalendarClock,
-  Database,
   Gauge,
   Layers3,
   MapPin,
-  ShieldCheck,
   ThermometerSun,
   UserRound
 } from "lucide-react";
@@ -31,7 +29,6 @@ interface DashboardData {
   summary: AnalyticsSummaryResponse | null;
   stations: StationsResponse | null;
   coverage: ForecastCoverageResponse | null;
-  adminCoverage: Record<string, number | string | null> | null;
 }
 
 const metricOrder: Metric[] = ["avg_temp", "min_temp", "max_temp", "precipitation"];
@@ -41,14 +38,12 @@ export function DashboardPage() {
   const [data, setData] = useState<DashboardData>({
     summary: null,
     stations: null,
-    coverage: null,
-    adminCoverage: null
+    coverage: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const range = useMemo(() => defaultRange(30), []);
   const showRole = isPrivilegedRole(user?.role);
-  const canViewAdminCoverage = (user?.role || "").toLowerCase() === "admin";
 
   useEffect(() => {
     let active = true;
@@ -57,11 +52,10 @@ export function DashboardPage() {
       setLoading(true);
       setError(null);
       try {
-        const [summary, stations, coverage, adminCoverage] = await Promise.all([
+        const [summary, stations, coverage] = await Promise.all([
           api.summary({ start_date: range.start, end_date: range.end, only_with_coordinates: true }),
           api.stations({ limit: 500 }),
-          api.forecastCoverage({ start_date: range.start, end_date: range.end }),
-          canViewAdminCoverage ? api.coverage() : Promise.resolve(null)
+          api.forecastCoverage({ start_date: range.start, end_date: range.end })
         ]);
 
         if (!active) {
@@ -71,8 +65,7 @@ export function DashboardPage() {
         setData({
           summary,
           stations,
-          coverage,
-          adminCoverage
+          coverage
         });
       } catch (err) {
         if (active) {
@@ -89,7 +82,7 @@ export function DashboardPage() {
     return () => {
       active = false;
     };
-  }, [canViewAdminCoverage, range.end, range.start]);
+  }, [range.end, range.start]);
 
   const coverageItems = data.coverage?.items || [];
   const totalComparedPoints = metricOrder.reduce(
@@ -98,20 +91,7 @@ export function DashboardPage() {
   );
   const modelCount = new Set(coverageItems.map((item) => item.model)).size;
   const horizons = Array.from(new Set(coverageItems.map((item) => item.horizon_days))).sort((left, right) => left - right);
-  const firstForecastDate = coverageItems
-    .map((item) => item.forecast_start_date)
-    .filter((value): value is string => Boolean(value))
-    .sort()[0];
-  const lastForecastDates = coverageItems
-    .map((item) => item.forecast_end_date)
-    .filter((value): value is string => Boolean(value))
-    .sort();
-  const lastForecastDate = lastForecastDates[lastForecastDates.length - 1];
-  const mainDataset =
-    coverageItems.slice().sort((left, right) => Number(right.forecast_rows) - Number(left.forecast_rows))[0] || null;
   const avgTempMetric = data.summary?.metrics.avg_temp || null;
-  const forecastRows = data.summary?.totals.forecast_rows ?? 0;
-  const actualRows = data.summary?.totals.actual_rows ?? 0;
   const riskiestMetric =
     metricOrder
       .map((metric) => ({
@@ -120,24 +100,6 @@ export function DashboardPage() {
       }))
       .filter((item) => item.max !== null)
       .sort((left, right) => Number(right.max) - Number(left.max))[0] || null;
-  const adminStats = data.adminCoverage
-    ? [
-        { label: "Станций всего", value: formatNumber(data.adminCoverage.stations_total) },
-        { label: "С координатами", value: formatNumber(data.adminCoverage.stations_with_coordinates) },
-        { label: "Запусков прогноза", value: formatNumber(data.adminCoverage.forecast_runs_total) },
-        { label: "Прогнозных значений", value: formatNumber(data.adminCoverage.forecast_values_total) },
-        { label: "Фактических наблюдений", value: formatNumber(data.adminCoverage.weather_rows_total) },
-        {
-          label: "Период факта",
-          value: `${formatDate(String(data.adminCoverage.weather_start_date || ""))} - ${formatDate(String(data.adminCoverage.weather_end_date || ""))}`
-        },
-        {
-          label: "Период прогноза",
-          value: `${formatDate(String(data.adminCoverage.forecast_start_date || ""))} - ${formatDate(String(data.adminCoverage.forecast_end_date || ""))}`
-        }
-      ]
-    : [];
-
   return (
     <section className="pageStack">
       <div className="pageHeader">
@@ -145,8 +107,8 @@ export function DashboardPage() {
           <span>Личный кабинет</span>
           <h1>{user?.full_name || "Пользователь"}</h1>
           <p>
-            Рабочая сводка SkyCast за период {formatDate(range.start)} - {formatDate(range.end)}: что уже загружено,
-            сколько есть сравнений и где можно быстро перейти к анализу.
+            Рабочая сводка SkyCast за период {formatDate(range.start)} - {formatDate(range.end)}: как выглядит качество
+            прогноза, где есть риск и куда перейти для детального разбора.
           </p>
         </div>
         <div className="headerActions">
@@ -172,7 +134,7 @@ export function DashboardPage() {
               icon={Gauge}
               label="Сравнений"
               value={formatNumber(totalComparedPoints)}
-              hint="по всем доступным метрикам"
+              hint="по выбранному периоду"
               tone="green"
             />
             <MetricCard
@@ -191,81 +153,43 @@ export function DashboardPage() {
             />
           </div>
 
-          <div className="dashboardGrid">
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Профиль</span>
-                  <h2>Данные аккаунта</h2>
-                </div>
-                <UserRound size={20} />
+          <article className="panel">
+            <div className="panelHeader">
+              <div>
+                <span>Профиль</span>
+                <h2>Данные аккаунта</h2>
               </div>
-              <div className="detailGrid">
-                <div>
-                  <span>Имя</span>
-                  <strong>{user?.full_name || "нет данных"}</strong>
-                </div>
-                <div>
-                  <span>Почта</span>
-                  <strong>{user?.email || "нет данных"}</strong>
-                </div>
-                {showRole ? (
-                  <div>
-                    <span>Уровень доступа</span>
-                    <strong>{roleLabel(user?.role)}</strong>
-                  </div>
-                ) : null}
-                <div>
-                  <span>Последний вход</span>
-                  <strong>{formatDateTime(user?.last_login_at)}</strong>
-                </div>
-                <div>
-                  <span>Аккаунт создан</span>
-                  <strong>{formatDateTime(user?.created_at)}</strong>
-                </div>
-                <div>
-                  <span>Статус</span>
-                  <strong>{user?.is_active ? "активен" : "отключен"}</strong>
-                </div>
+              <UserRound size={20} />
+            </div>
+            <div className="detailGrid">
+              <div>
+                <span>Имя</span>
+                <strong>{user?.full_name || "нет данных"}</strong>
               </div>
-            </article>
-
-            <article className="panel">
-              <div className="panelHeader">
-                <div>
-                  <span>Наличие данных</span>
-                  <h2>Что уже есть в системе</h2>
-                </div>
-                <Database size={20} />
+              <div>
+                <span>Почта</span>
+                <strong>{user?.email || "нет данных"}</strong>
               </div>
-              <div className="detailGrid">
+              {showRole ? (
                 <div>
-                  <span>Прогнозных строк</span>
-                  <strong>{formatNumber(forecastRows)}</strong>
+                  <span>Уровень доступа</span>
+                  <strong>{roleLabel(user?.role)}</strong>
                 </div>
-                <div>
-                  <span>Фактических строк</span>
-                  <strong>{formatNumber(actualRows)}</strong>
-                </div>
-                <div>
-                  <span>Первый день прогноза</span>
-                  <strong>{formatDate(firstForecastDate)}</strong>
-                </div>
-                <div>
-                  <span>Последний день прогноза</span>
-                  <strong>{formatDate(lastForecastDate)}</strong>
-                </div>
-                <div>
-                  <span>Основной набор</span>
-                  <strong>{mainDataset ? `${mainDataset.model}, ${mainDataset.horizon_days} дн.` : "нет данных"}</strong>
-                </div>
-                <div>
-                  <span>Станций в покрытии</span>
-                  <strong>{formatNumber(mainDataset?.station_count ?? 0)}</strong>
-                </div>
+              ) : null}
+              <div>
+                <span>Последний вход</span>
+                <strong>{formatDateTime(user?.last_login_at)}</strong>
               </div>
-            </article>
-          </div>
+              <div>
+                <span>Аккаунт создан</span>
+                <strong>{formatDateTime(user?.created_at)}</strong>
+              </div>
+              <div>
+                <span>Статус</span>
+                <strong>{user?.is_active ? "активен" : "отключен"}</strong>
+              </div>
+            </div>
+          </article>
 
           <article className="panel">
             <div className="panelHeader">
@@ -311,31 +235,12 @@ export function DashboardPage() {
               <span>Посмотрите ежедневный факт, прогноз и ошибку без ручного сопоставления строк.</span>
             </Link>
             <Link className="quickTile" to="/app/forecasts">
-              <Database size={22} />
-              <strong>Архив прогнозов</strong>
-              <span>Проверьте, какие загрузки уже попали в систему и с каким покрытием.</span>
+              <Layers3 size={22} />
+              <strong>Прогнозы по станции</strong>
+              <span>Посмотрите прогнозные значения, модели и горизонты за выбранный период.</span>
             </Link>
           </div>
 
-          {canViewAdminCoverage && data.adminCoverage ? (
-            <article className="panel compactPanel">
-              <div className="panelHeader">
-                <div>
-                  <span>Служебно</span>
-                  <h2>Сводка данных</h2>
-                </div>
-                <ShieldCheck size={20} />
-              </div>
-              <div className="miniStats">
-                {adminStats.map((item) => (
-                  <div key={item.label}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </article>
-          ) : null}
         </>
       ) : null}
     </section>

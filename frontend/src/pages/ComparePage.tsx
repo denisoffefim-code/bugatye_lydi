@@ -148,47 +148,59 @@ export function ComparePage() {
       </div>
 
       <form
-        className="filterPanel"
+        className="analysisForm"
         onSubmit={(event) => {
           event.preventDefault();
           void runComparison({ ...filters, model: filters.model.trim() });
         }}
       >
-        <label>
-          <span>Станция</span>
-          <select value={filters.stationId} onChange={(event) => updateFilter("stationId", event.target.value ? Number(event.target.value) : "")}>
-            <option value="">Выберите станцию</option>
-            {stations.map((station) => (
-              <option key={station.id} value={station.id}>
-                {station.name} · {station.wmo_index}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>С даты</span>
-          <input type="date" value={filters.startDate} onChange={(event) => updateFilter("startDate", event.target.value)} />
-        </label>
-        <label>
-          <span>По дату</span>
-          <input type="date" value={filters.endDate} onChange={(event) => updateFilter("endDate", event.target.value)} />
-        </label>
-        <label>
-          <span>Метрика</span>
-          <select value={filters.metric} onChange={(event) => updateFilter("metric", event.target.value as Metric)}>
-            <option value="avg_temp">Средняя температура</option>
-            <option value="min_temp">Минимальная температура</option>
-            <option value="max_temp">Максимальная температура</option>
-            <option value="precipitation">Осадки</option>
-          </select>
-        </label>
-        <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
-          <SlidersHorizontal size={17} />
-          Дополнительно
-        </button>
+        <div className="filterPanel mainFilters">
+          <label>
+            <span>Станция</span>
+            <select value={filters.stationId} onChange={(event) => updateFilter("stationId", event.target.value ? Number(event.target.value) : "")}>
+              <option value="">Выберите станцию</option>
+              {stations.map((station) => (
+                <option key={station.id} value={station.id}>
+                  {station.name} · {station.wmo_index}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>С даты</span>
+            <input type="date" value={filters.startDate} onChange={(event) => updateFilter("startDate", event.target.value)} />
+          </label>
+          <label>
+            <span>По дату</span>
+            <input type="date" value={filters.endDate} onChange={(event) => updateFilter("endDate", event.target.value)} />
+          </label>
+          <label>
+            <span>Метрика</span>
+            <select value={filters.metric} onChange={(event) => updateFilter("metric", event.target.value as Metric)}>
+              <option value="avg_temp">Средняя температура</option>
+              <option value="min_temp">Минимальная температура</option>
+              <option value="max_temp">Максимальная температура</option>
+              <option value="precipitation">Осадки</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="formActions">
+          <button className="primaryButton analysisButton" type="submit" disabled={loading || stationsLoading}>
+            <GitCompareArrows size={18} />
+            {loading ? "Строим анализ" : "Показать анализ"}
+          </button>
+          <button className="ghostButton" type="button" onClick={handleReset} disabled={loading}>
+            Сбросить
+          </button>
+          <button className="ghostButton filterToggle" type="button" onClick={() => setShowAdvanced((current) => !current)}>
+            <SlidersHorizontal size={17} />
+            Дополнительные параметры
+          </button>
+        </div>
 
         {showAdvanced ? (
-          <>
+          <div className="filterPanel advancedPanel">
             <label>
               <span>Модель</span>
               <div className="inputShell">
@@ -207,18 +219,8 @@ export function ComparePage() {
                 ))}
               </select>
             </label>
-          </>
+          </div>
         ) : null}
-
-        <div className="formActions">
-          <button className="primaryButton" type="submit" disabled={loading || stationsLoading}>
-            <GitCompareArrows size={18} />
-            {loading ? "Сравниваем" : "Показать сравнение"}
-          </button>
-          <button className="ghostButton" type="button" onClick={handleReset} disabled={loading}>
-            Сбросить
-          </button>
-        </div>
       </form>
 
       {stationsLoading ? <SkeletonGrid cards={3} /> : null}
@@ -226,7 +228,7 @@ export function ComparePage() {
       {error ? <ErrorState text={error} /> : null}
 
       {!stationsLoading && !loading && !error && !hasLoaded ? (
-        <EmptyState title="Сравнение еще не запущено" text="Выберите станцию и нажмите «Показать сравнение»." />
+        <EmptyState title="Анализ еще не запущен" text="Выберите станцию и нажмите «Показать анализ»." />
       ) : null}
 
       {!stationsLoading && !loading && !error && hasLoaded ? (
