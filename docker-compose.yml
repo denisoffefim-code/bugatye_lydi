@@ -161,6 +161,23 @@ services:
     volumes:
       - outbox-spool:/var/lib/skycast/outbox-spool
 
+  transport-observer:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - ./deploy/docker/local.env
+    command: ["python", "-m", "skycast.transport_observer"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres-data:
   outbox-spool:

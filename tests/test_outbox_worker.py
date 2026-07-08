@@ -128,7 +128,7 @@ class OutboxWorkerHelpersTests(unittest.TestCase):
         )
 
         ssl_context = Mock()
-        with patch("skycast.outbox_worker.ssl.create_default_context", return_value=ssl_context):
+        with patch("skycast.transport.ssl.create_default_context", return_value=ssl_context):
             kwargs = build_kafka_producer_kwargs(settings)
 
         self.assertEqual(kwargs["security_protocol"], "SASL_SSL")

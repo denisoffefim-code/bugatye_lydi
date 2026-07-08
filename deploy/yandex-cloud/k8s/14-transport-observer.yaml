@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transport-observer
+  namespace: skycast
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: transport-observer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: transport-observer
+    spec:
+      containers:
+        - name: transport-observer
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-150043
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "skycast.transport_observer"]
+          envFrom:
+            - configMapRef:
+                name: skycast-shared-config
+            - secretRef:
+                name: skycast-runtime-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
+          volumeMounts:
+            - name: yandex-ca
+              mountPath: /etc/ssl/certs/yandex-cloud
+              readOnly: true
+      volumes:
+        - name: yandex-ca
+          secret:
+            secretName: skycast-yandex-ca

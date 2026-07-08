@@ -8,6 +8,7 @@ from skycast.main import (
     list_stations,
     station_details,
     station_series,
+    transport_overview,
     top_errors,
     worst_stations,
 )
@@ -24,3 +25,4 @@ app.add_api_route("/api/analytics/worst-stations", worst_stations, methods=["GET
 app.add_api_route("/api/analytics/station-series", station_series, methods=["GET"])
 app.add_api_route("/api/analytics/coverage", analytics_coverage, methods=["GET"])
 app.add_api_route("/api/analytics/forecast-coverage", forecast_coverage, methods=["GET"])
+app.add_api_route("/api/admin/transports/overview", transport_overview, methods=["GET"])

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -16,6 +16,7 @@ from skycast.main import (
     ingest_telemetry,
     list_stations,
     logout_user_sessions,
+    transport_overview,
 )
 
 
@@ -137,10 +138,40 @@ class RBACEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(conn.fetchrow_calls), 1)
 
     async def test_admin_can_revoke_user_sessions(self) -> None:
-        conn = _RBACConnection(fetchval_results=[1])
+        conn = _RBACConnection(fetchval_results=[1], fetch_results=[[]])
 
-        with patch("skycast.main.get_pool", return_value=_FakePool(conn)):
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)), patch(
+            "skycast.main.invalidate_user_sessions",
+            new_callable=AsyncMock,
+        ), patch(
+            "skycast.main.invalidate_auth_session",
+            new_callable=AsyncMock,
+        ):
             await logout_user_sessions(user_id=42, current_auth=_auth_context(ROLE_ADMIN))
 
         self.assertEqual(len(conn.execute_calls), 1)
         self.assertIn("UPDATE auth_sessions", conn.execute_calls[0][0])
+
+    async def test_admin_can_view_transport_overview(self) -> None:
+        conn = _RBACConnection()
+        fake_redis = AsyncMock()
+        fake_redis.ping = AsyncMock()
+
+        with patch("skycast.main.get_pool", return_value=_FakePool(conn)), patch(
+            "skycast.main.collect_db_metrics",
+            new=AsyncMock(return_value={"outbox_pending_total": 3}),
+        ), patch(
+            "skycast.main.get_redis_client",
+            new=AsyncMock(return_value=fake_redis),
+        ), patch(
+            "skycast.main.load_transport_runtime_snapshot",
+            new=AsyncMock(return_value={"publisher": {"counters": {"published_total": 5}}}),
+        ), patch(
+            "skycast.main._probe_kafka_topics",
+            new=AsyncMock(return_value={"available": True}),
+        ):
+            response = await transport_overview(_=_auth_context(ROLE_ADMIN))
+
+        self.assertEqual(response["database_metrics"]["outbox_pending_total"], 3)
+        self.assertTrue(response["kafka"]["available"])
+        self.assertEqual(response["redis"]["snapshot"]["publisher"]["counters"]["published_total"], 5)

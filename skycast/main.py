@@ -27,7 +27,14 @@ from skycast.auth import (
     validate_password,
     verify_password,
 )
-from skycast.cache import close_redis_client, invalidate_analytics_cache, maybe_cached_json_response
+from skycast.auth_cache import (
+    cache_auth_session,
+    get_cached_auth_session,
+    invalidate_auth_session,
+    invalidate_user_sessions,
+    should_touch_auth_session,
+)
+from skycast.cache import close_redis_client, get_redis_client, invalidate_analytics_cache, maybe_cached_json_response
 from skycast.clients import (
     AsyncRateLimiter,
     fetch_noaa_station_metadata,
@@ -44,6 +51,7 @@ from skycast.forecast_contract import (
 )
 from skycast.logging_utils import configure_logging
 from skycast.migrations import run_migrations
+from skycast.monitoring import collect_db_metrics
 from skycast.pipeline import (
     build_forecast_dedupe_key,
     build_forecast_raw_payload,
@@ -51,6 +59,13 @@ from skycast.pipeline import (
     build_telemetry_dedupe_key,
     json_dumps_payload,
 )
+from skycast.transport import (
+    build_kafka_consumer_kwargs,
+    configured_transport_topics,
+    kafka_topic_name,
+    load_aiokafka_consumer,
+)
+from skycast.transport_runtime import load_transport_runtime_snapshot
 
 configure_logging(
     service_name=settings.app_name,
@@ -327,10 +342,109 @@ def _user_out_from_row(row: Any) -> UserOut:
     )
 
 
+def _user_out_cache_payload(user: UserOut) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat(),
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at is not None else None,
+    }
+
+
+def _user_out_from_cache_payload(payload: dict[str, Any]) -> UserOut:
+    return UserOut(
+        id=int(payload["id"]),
+        email=str(payload["email"]),
+        full_name=str(payload["full_name"]),
+        role=_normalize_user_role(str(payload["role"])),
+        is_active=bool(payload["is_active"]),
+        created_at=datetime.fromisoformat(str(payload["created_at"])),
+        last_login_at=(
+            datetime.fromisoformat(str(payload["last_login_at"]))
+            if payload.get("last_login_at") is not None
+            else None
+        ),
+    )
+
+
+async def _probe_kafka_topics() -> dict[str, Any]:
+    expected_topics = [
+        kafka_topic_name(settings.kafka_topic_prefix, topic)
+        for topic in configured_transport_topics(settings)
+    ]
+    consumer_cls = load_aiokafka_consumer()
+    consumer = consumer_cls(
+        **build_kafka_consumer_kwargs(
+            settings,
+            client_id=f"{settings.transport_observer_client_id}-probe",
+            group_id=None,
+        )
+    )
+    started = False
+    try:
+        await consumer.start()
+        started = True
+        known_topics = sorted(
+            topic_name
+            for topic_name in await consumer.topics()
+            if topic_name.startswith(f"{settings.kafka_topic_prefix}.")
+        )
+        return {
+            "available": True,
+            "expected_topics": expected_topics,
+            "known_topics": known_topics,
+            "missing_topics": [topic_name for topic_name in expected_topics if topic_name not in known_topics],
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "expected_topics": expected_topics,
+            "error": str(exc),
+        }
+    finally:
+        if started:
+            await consumer.stop()
+
+
 async def _resolve_auth_context(request: Request, authorization: str | None) -> dict[str, Any]:
     token = extract_bearer_token(authorization)
     if token is None:
         raise _auth_required_exception()
+
+    token_hash = hash_token(token)
+    cached_auth_session = await get_cached_auth_session(token_hash)
+    if cached_auth_session is not None:
+        session_id = int(cached_auth_session["session_id"])
+        if await should_touch_auth_session(session_id):
+            try:
+                pool = get_pool()
+                async with pool.acquire() as conn:
+                    status = await conn.execute(
+                        """
+                        UPDATE auth_sessions
+                        SET last_used_at = NOW()
+                        WHERE id = $1
+                          AND revoked_at IS NULL
+                          AND expires_at > NOW()
+                        """,
+                        session_id,
+                    )
+                if status.endswith("0"):
+                    await invalidate_auth_session(token_hash)
+                    raise _auth_required_exception()
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception("auth_session_last_used_update_failed", extra={"session_id": session_id})
+        return {
+            "session_id": session_id,
+            "token_hash": token_hash,
+            "user": _user_out_from_cache_payload(cached_auth_session["user"]),
+            "client_ip": request.client.host if request.client else None,
+        }
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -344,14 +458,15 @@ async def _resolve_auth_context(request: Request, authorization: str | None) -> 
                 u.is_active,
                 u.created_at,
                 u.last_login_at,
-                s.id AS session_id
+                s.id AS session_id,
+                s.expires_at
             FROM auth_sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = $1
               AND s.revoked_at IS NULL
               AND s.expires_at > NOW()
             """,
-            hash_token(token),
+            token_hash,
         )
         if row is None or not row["is_active"]:
             raise _auth_required_exception()
@@ -365,9 +480,18 @@ async def _resolve_auth_context(request: Request, authorization: str | None) -> 
             row["session_id"],
         )
 
+    user = _user_out_from_row(row)
+    await cache_auth_session(
+        token_hash,
+        session_id=row["session_id"],
+        user_id=user.id,
+        user_payload=_user_out_cache_payload(user),
+        expires_at=row["expires_at"],
+    )
     return {
         "session_id": row["session_id"],
-        "user": _user_out_from_row(row),
+        "token_hash": token_hash,
+        "user": user,
         "client_ip": request.client.host if request.client else None,
     }
 
@@ -713,13 +837,15 @@ async def login_user(payload: UserLoginRequest, request: Request) -> AuthTokenRe
 
         expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.auth_session_ttl_hours)
         token = generate_session_token()
-        await conn.execute(
+        token_hash = hash_token(token)
+        session_id = await conn.fetchval(
             """
             INSERT INTO auth_sessions (user_id, token_hash, expires_at, user_agent, ip_address)
             VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
             """,
             user_row["id"],
-            hash_token(token),
+            token_hash,
             expires_at,
             request.headers.get("user-agent"),
             request.client.host if request.client else None,
@@ -743,10 +869,18 @@ async def login_user(payload: UserLoginRequest, request: Request) -> AuthTokenRe
             "user_id": user_row["id"],
         },
     )
+    user = _user_out_from_row(user_row)
+    await cache_auth_session(
+        token_hash,
+        session_id=session_id,
+        user_id=user.id,
+        user_payload=_user_out_cache_payload(user),
+        expires_at=expires_at,
+    )
     return AuthTokenResponse(
         access_token=token,
         expires_at=expires_at,
-        user=_user_out_from_row(user_row),
+        user=user,
     )
 
 
@@ -762,6 +896,7 @@ async def logout_user(current_auth: dict[str, Any] = Depends(get_current_auth_co
             """,
             current_auth["session_id"],
         )
+    await invalidate_auth_session(current_auth["token_hash"], user_id=current_auth["user"].id)
 
     logger.info(
         "user_logged_out",
@@ -778,6 +913,7 @@ async def logout_user_sessions(
     exclude_current_session: bool = True,
     current_auth: dict[str, Any] = Depends(get_current_admin_auth_context),
 ) -> None:
+    revoked_token_hashes: list[str] = []
     pool = get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval("SELECT 1 FROM users WHERE id = $1", user_id)
@@ -790,6 +926,15 @@ async def logout_user_sessions(
             clauses.append(f"id <> ${len(args) + 1}")
             args.append(current_auth["session_id"])
 
+        revoked_rows = await conn.fetch(
+            f"""
+            SELECT token_hash
+            FROM auth_sessions
+            WHERE {' AND '.join(clauses)}
+            """,
+            *args,
+        )
+        revoked_token_hashes = [str(row["token_hash"]) for row in revoked_rows]
         await conn.execute(
             f"""
             UPDATE auth_sessions
@@ -798,6 +943,11 @@ async def logout_user_sessions(
             """,
             *args,
         )
+    if revoked_token_hashes:
+        for token_hash in revoked_token_hashes:
+            await invalidate_auth_session(token_hash, user_id=user_id)
+    elif not exclude_current_session or user_id != current_auth["user"].id:
+        await invalidate_user_sessions(user_id)
 
     logger.info(
         "user_sessions_revoked",
@@ -1933,6 +2083,37 @@ async def analytics_coverage(
             """
         )
     return dict(row)
+
+
+@app.get("/api/admin/transports/overview")
+async def transport_overview(
+    _: dict[str, Any] = Depends(get_current_admin_auth_context),
+) -> dict[str, Any]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        database_metrics = await collect_db_metrics(conn)
+
+    redis_status: dict[str, Any] = {"available": False}
+    client = await get_redis_client()
+    if client is not None:
+        try:
+            await client.ping()
+            redis_status = {
+                "available": True,
+                "snapshot": await load_transport_runtime_snapshot(client),
+            }
+        except Exception as exc:
+            redis_status = {
+                "available": False,
+                "error": str(exc),
+            }
+
+    return {
+        "transport_topics": list(configured_transport_topics(settings)),
+        "database_metrics": database_metrics,
+        "redis": redis_status,
+        "kafka": await _probe_kafka_topics(),
+    }
 
 
 @app.get("/api/analytics/forecast-coverage")

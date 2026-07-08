@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,8 +17,19 @@ except ModuleNotFoundError:  # pragma: no cover - helper tests may run without r
     asyncpg = Any  # type: ignore[assignment]
 
 from skycast.config import settings
-from skycast.config import Settings
 from skycast.logging_utils import configure_logging
+from skycast.transport import (
+    build_kafka_producer_kwargs,
+    kafka_topic_name,
+    load_aiokafka_producer,
+    load_redis_module,
+    redis_stream_name,
+)
+from skycast.transport_runtime import (
+    record_publish_failure,
+    record_published_event,
+    record_publisher_heartbeat,
+)
 
 if TYPE_CHECKING:
     from aiokafka import AIOKafkaProducer
@@ -38,15 +48,6 @@ class OutboxMessage:
     payload: dict[str, Any]
     attempts: int
     created_at: datetime
-
-
-def redis_stream_name(prefix: str, topic: str) -> str:
-    return f"{prefix}.{topic}"
-
-
-def kafka_topic_name(prefix: str, topic: str) -> str:
-    return f"{prefix}.{topic}"
-
 
 def compute_retry_delay_seconds(
     attempts: int,
@@ -122,49 +123,6 @@ def deserialize_outbox_message(payload: dict[str, Any]) -> OutboxMessage:
         created_at=datetime.fromisoformat(str(payload["created_at"])),
     )
 
-
-def load_redis_module():
-    try:
-        import redis.asyncio as redis_async
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on local env
-        raise RuntimeError("redis package is required to run the outbox worker") from exc
-    return redis_async
-
-
-def load_aiokafka_producer():
-    try:
-        from aiokafka import AIOKafkaProducer as producer_cls
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on local env
-        raise RuntimeError("aiokafka package is required to run the outbox worker") from exc
-    return producer_cls
-
-
-def build_kafka_producer_kwargs(app_settings: Settings) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "bootstrap_servers": app_settings.kafka_bootstrap_servers,
-        "client_id": app_settings.kafka_client_id,
-        "enable_idempotence": True,
-        "security_protocol": app_settings.kafka_security_protocol,
-    }
-    if (
-        app_settings.kafka_ssl_cafile
-        or app_settings.kafka_ssl_certfile
-        or app_settings.kafka_ssl_keyfile
-    ):
-        ssl_context = ssl.create_default_context(cafile=app_settings.kafka_ssl_cafile)
-        if app_settings.kafka_ssl_certfile and app_settings.kafka_ssl_keyfile:
-            ssl_context.load_cert_chain(
-                certfile=app_settings.kafka_ssl_certfile,
-                keyfile=app_settings.kafka_ssl_keyfile,
-            )
-        kwargs["ssl_context"] = ssl_context
-    if app_settings.kafka_security_protocol.startswith("SASL"):
-        kwargs["sasl_mechanism"] = app_settings.kafka_sasl_mechanism
-        kwargs["sasl_plain_username"] = app_settings.kafka_sasl_username
-        kwargs["sasl_plain_password"] = app_settings.kafka_sasl_password
-    return kwargs
-
-
 class LocalOutboxSpool:
     def __init__(self, directory: str | Path, *, enabled: bool) -> None:
         self.enabled = enabled
@@ -213,6 +171,11 @@ class LocalOutboxSpool:
         path = self.file_path(message_id)
         if path.exists():
             path.unlink()
+
+    def count_messages(self) -> int:
+        if not self.enabled or not self.directory.exists():
+            return 0
+        return len(list(self.directory.glob("*.json")))
 
 
 async def claim_outbox_batch(conn: asyncpg.Connection, batch_size: int) -> list[OutboxMessage]:
@@ -347,6 +310,10 @@ class OutboxPublisher:
         self._redis_client: Any | None = None
         self._kafka_producer: Any | None = None
 
+    @property
+    def runtime_client(self) -> Any | None:
+        return self._redis_client
+
     async def start(self) -> None:
         redis_async = load_redis_module()
         producer_cls = load_aiokafka_producer()
@@ -361,6 +328,12 @@ class OutboxPublisher:
             raise
         self._redis_client = redis_client
         self._kafka_producer = kafka_producer
+        await record_publisher_heartbeat(
+            redis_client,
+            status="running",
+            worker_name=settings.kafka_client_id,
+            spool_backlog_total=0,
+        )
 
     async def ensure_started(self) -> None:
         if self._redis_client is not None and self._kafka_producer is not None:
@@ -372,11 +345,19 @@ class OutboxPublisher:
             await self._kafka_producer.stop()
             self._kafka_producer = None
         if self._redis_client is not None:
+            await record_publisher_heartbeat(
+                self._redis_client,
+                status="stopped",
+                worker_name=settings.kafka_client_id,
+                spool_backlog_total=0,
+            )
             await self._redis_client.aclose()
             self._redis_client = None
 
     async def publish(self, message: OutboxMessage) -> tuple[str, Any]:
         await self.ensure_started()
+        assert self._redis_client is not None
+        assert self._kafka_producer is not None
         try:
             stream_entry_id = await publish_to_redis_stream(
                 self._redis_client,
@@ -388,8 +369,29 @@ class OutboxPublisher:
                 topic_prefix=settings.kafka_topic_prefix,
                 message=message,
             )
+            await record_published_event(
+                self._redis_client,
+                topic=message.topic,
+                message_id=message.id,
+                message_key=message.message_key,
+                aggregate_key=message.aggregate_key,
+                attempts=message.attempts,
+                redis_stream=redis_stream_name(settings.redis_stream_prefix, message.topic),
+                redis_entry_id=stream_entry_id,
+                kafka_topic=kafka_metadata.topic,
+                kafka_partition=kafka_metadata.partition,
+                kafka_offset=kafka_metadata.offset,
+            )
             return stream_entry_id, kafka_metadata
-        except Exception:
+        except Exception as exc:
+            await record_publish_failure(
+                self._redis_client,
+                topic=message.topic,
+                message_id=message.id,
+                message_key=message.message_key,
+                attempts=message.attempts,
+                error_text=str(exc),
+            )
             await self.stop()
             raise
 
@@ -510,6 +512,13 @@ async def run_dispatch_loop() -> None:
         while True:
             replayed = await replay_spool_once(pool, publisher, spool)
             published = await dispatch_outbox_once(pool, publisher, spool)
+            if publisher.runtime_client is not None:
+                await record_publisher_heartbeat(
+                    publisher.runtime_client,
+                    status="running",
+                    worker_name=settings.kafka_client_id,
+                    spool_backlog_total=spool.count_messages(),
+                )
             if replayed == 0 and published == 0:
                 await asyncio.sleep(settings.outbox_poll_seconds)
     finally:

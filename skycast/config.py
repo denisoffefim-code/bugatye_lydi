@@ -92,6 +92,22 @@ class Settings:
     analytics_cache_ttl_seconds: int = int(os.getenv("ANALYTICS_CACHE_TTL_SECONDS", "300"))
     auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", "168"))
     auth_password_hash_iterations: int = int(os.getenv("AUTH_PASSWORD_HASH_ITERATIONS", "390000"))
+    auth_cache_enabled: bool = _get_bool("AUTH_CACHE_ENABLED", True)
+    auth_cache_ttl_seconds: int = int(os.getenv("AUTH_CACHE_TTL_SECONDS", "300"))
+    auth_last_used_throttle_seconds: int = int(os.getenv("AUTH_LAST_USED_THROTTLE_SECONDS", "60"))
+    transport_topics: tuple[str, ...] = _get_csv(
+        "TRANSPORT_TOPICS",
+        ("forecast.accepted", "telemetry.accepted"),
+    )
+    transport_recent_events_limit: int = int(os.getenv("TRANSPORT_RECENT_EVENTS_LIMIT", "100"))
+    transport_event_ttl_seconds: int = int(os.getenv("TRANSPORT_EVENT_TTL_SECONDS", "604800"))
+    transport_observer_client_id: str = os.getenv("TRANSPORT_OBSERVER_CLIENT_ID", "skycast-transport-observer")
+    transport_observer_consumer_group: str = os.getenv(
+        "TRANSPORT_OBSERVER_CONSUMER_GROUP",
+        "skycast-transport-observer",
+    )
+    transport_observer_poll_seconds: float = float(os.getenv("TRANSPORT_OBSERVER_POLL_SECONDS", "2"))
+    transport_observer_batch_size: int = int(os.getenv("TRANSPORT_OBSERVER_BATCH_SIZE", "100"))
 
     def validate(self) -> None:
         if not self.database_url:
@@ -125,6 +141,20 @@ class Settings:
             raise RuntimeError("AUTH_SESSION_TTL_HOURS must be >= 1")
         if self.auth_password_hash_iterations < 100000:
             raise RuntimeError("AUTH_PASSWORD_HASH_ITERATIONS must be >= 100000")
+        if self.auth_cache_enabled and self.auth_cache_ttl_seconds < 1:
+            raise RuntimeError("AUTH_CACHE_TTL_SECONDS must be >= 1 when AUTH_CACHE_ENABLED=true")
+        if self.auth_last_used_throttle_seconds < 1:
+            raise RuntimeError("AUTH_LAST_USED_THROTTLE_SECONDS must be >= 1")
+        if not self.transport_topics:
+            raise RuntimeError("TRANSPORT_TOPICS must contain at least one topic")
+        if self.transport_recent_events_limit < 1:
+            raise RuntimeError("TRANSPORT_RECENT_EVENTS_LIMIT must be >= 1")
+        if self.transport_event_ttl_seconds < 1:
+            raise RuntimeError("TRANSPORT_EVENT_TTL_SECONDS must be >= 1")
+        if self.transport_observer_poll_seconds <= 0:
+            raise RuntimeError("TRANSPORT_OBSERVER_POLL_SECONDS must be > 0")
+        if self.transport_observer_batch_size < 1:
+            raise RuntimeError("TRANSPORT_OBSERVER_BATCH_SIZE must be >= 1")
 
 
 settings = Settings()

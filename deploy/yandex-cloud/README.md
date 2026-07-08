@@ -49,6 +49,7 @@ kubectl apply -f deploy/yandex-cloud/k8s/10-forecast-service.yaml
 kubectl apply -f deploy/yandex-cloud/k8s/11-telemetry-service.yaml
 kubectl apply -f deploy/yandex-cloud/k8s/12-analytics-api.yaml
 kubectl apply -f deploy/yandex-cloud/k8s/13-outbox-worker.yaml
+kubectl apply -f deploy/yandex-cloud/k8s/14-transport-observer.yaml
 kubectl apply -f deploy/yandex-cloud/k8s/20-ingress.yaml
 ```
 
@@ -58,6 +59,7 @@ kubectl apply -f deploy/yandex-cloud/k8s/20-ingress.yaml
 - Все workload'ы рассчитаны на одновузловой кластер и используют `1 replica`.
 - Публичный вход идёт через `Ingress` c `ingressClassName: gwin-default`; backend-сервис `analytics-api` имеет тип `NodePort`, потому что этого требует Gwin/Yandex ALB.
 - `outbox-worker` оформлен как `StatefulSet`, чтобы spool жил на отдельном PVC.
+- `transport-observer` читает Kafka и Redis Streams, а агрегированное audit-state складывает обратно в Redis для admin endpoint `/api/admin/transports/overview`.
 - В контейнерах SkyCast задан `runAsUser/runAsGroup=999`, что соответствует пользователю образа.
 - Для быстрого человекочитаемого адреса без собственного DNS можно использовать `http://analytics.<INGRESS-IP>.sslip.io`.
 
@@ -70,6 +72,7 @@ kubectl get pods -n skycast
 kubectl get svc -n skycast
 kubectl logs job/skycast-migrations -n skycast
 kubectl logs statefulset/outbox-worker -n skycast
+kubectl logs deployment/transport-observer -n skycast
 ```
 
 Проверки:
@@ -79,3 +82,4 @@ kubectl logs statefulset/outbox-worker -n skycast
 - `GET http://analytics.<INGRESS-IP>.sslip.io/ready`
 - `GET http://analytics.<INGRESS-IP>.sslip.io/metrics`
 - `GET http://analytics.<INGRESS-IP>.sslip.io/api/analytics/coverage`
+- `GET http://analytics.<INGRESS-IP>.sslip.io/api/admin/transports/overview`
