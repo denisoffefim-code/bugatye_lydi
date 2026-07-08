@@ -16,7 +16,7 @@ spec:
         fsGroup: 999
       containers:
         - name: migrations
-          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-03
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-150043
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "skycast.migrate"]
           envFrom:
