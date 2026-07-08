@@ -14,6 +14,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - helper tests may run without runtime deps
     asyncpg = Any  # type: ignore[assignment]
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from skycast.auth import (
@@ -125,6 +126,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_allowed_origins),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 METRIC_SQL_MAP = {
     "avg_temp": ("fv.avg_temp", "wd.avg_temp"),
@@ -755,12 +763,22 @@ async def _resolve_station_id(
         )
     return resolved
 
-@app.get("/health")
-async def health() -> dict[str, Any]:
+@app.get("/live")
+async def live() -> dict[str, str]:
+    return {"status": "ok", "service": settings.app_name}
+
+
+@app.get("/ready")
+async def ready() -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         version = await conn.fetchval("SELECT version()")
     return {"status": "ok", "service": settings.app_name, "database": version}
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return await ready()
 
 
 @app.get("/api/stations")

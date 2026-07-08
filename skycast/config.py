@@ -27,6 +27,14 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _get_csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    items = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return items or default
+
+
 _load_dotenv()
 
 
@@ -35,6 +43,15 @@ class Settings:
     app_name: str = os.getenv("APP_NAME", "SkyCast")
     host: str = os.getenv("APP_HOST", "0.0.0.0")
     port: int = int(os.getenv("APP_PORT", os.getenv("PORT", "8080")))
+    cors_allowed_origins: tuple[str, ...] = _get_csv(
+        "CORS_ALLOWED_ORIGINS",
+        (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ),
+    )
     database_url: str = os.getenv("DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     redis_stream_prefix: str = os.getenv("REDIS_STREAM_PREFIX", "skycast")

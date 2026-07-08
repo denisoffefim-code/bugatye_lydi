@@ -3,36 +3,29 @@ kind: Ingress
 metadata:
   name: skycast
   namespace: skycast
+  annotations:
+    gwin.yandex.cloud/groupName: skycast-public
+    gwin.yandex.cloud/externalIPv4Address: "auto"
+    gwin.yandex.cloud/albBalancerName: skycast-public
+    gwin.yandex.cloud/rules.backends.hc.http.path: /ready
+    gwin.yandex.cloud/rules.backends.hc.interval: 10s
+    gwin.yandex.cloud/rules.backends.hc.timeout: 5s
+    gwin.yandex.cloud/rules.backends.hc.healthyThreshold: "2"
+    gwin.yandex.cloud/rules.backends.hc.unhealthyThreshold: "3"
 spec:
-  ingressClassName: alb
+  ingressClassName: gwin-default
+  defaultBackend:
+    service:
+      name: analytics-api
+      port:
+        number: 80
   rules:
-    - host: analytics.example.com
-      http:
+    - http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: analytics-api
-                port:
-                  number: 80
-    - host: forecast.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: forecast-service
-                port:
-                  number: 80
-    - host: telemetry.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: telemetry-service
                 port:
                   number: 80

@@ -17,11 +17,11 @@ spec:
         fsGroup: 999
       containers:
         - name: analytics-api
-          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-03
+          image: cr.yandex/crp0uld88a95dqoql4bj/skycast:manual-20260708-05
           imagePullPolicy: IfNotPresent
           env:
             - name: APP_MODULE
-              value: analytics_api.app:app
+              value: skycast.main:app
             - name: APP_PORT
               value: "8080"
           envFrom:
@@ -72,7 +72,7 @@ metadata:
   name: analytics-api
   namespace: skycast
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app.kubernetes.io/name: analytics-api
   ports:
