@@ -17,6 +17,7 @@ import {
   biasSummary,
   chartNumberDomain,
   collapseSeriesRows,
+  finiteNumber,
   defaultRange,
   formatDate,
   formatNumber,
@@ -93,7 +94,7 @@ export function AnalyticsPage() {
 
   const errorChartData = (topErrors?.items || []).slice(0, 8).map((item) => ({
     name: item.name.length > 14 ? `${item.name.slice(0, 14)}...` : item.name,
-    error: item.absolute_error ?? 0
+    error: finiteNumber(item.absolute_error) ?? 0
   }));
   const seriesChartData = dailySeries.map((item) => ({
     date: formatDate(item.date),
@@ -393,7 +394,7 @@ export function AnalyticsPage() {
                   <BarChart data={errorChartData} margin={{ top: 12, right: 16, bottom: 12, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-12} textAnchor="end" height={70} tickMargin={10} />
-                    <YAxis domain={errorChartDomain} />
+                    <YAxis domain={errorChartDomain} allowDataOverflow tickFormatter={(value) => formatNumber(value, 1)} />
                     <Tooltip />
                     <Bar dataKey="error" name="Абсолютная ошибка" fill="#38bdf8" radius={[4, 4, 0, 0]} maxBarSize={38} />
                   </BarChart>
@@ -429,7 +430,7 @@ export function AnalyticsPage() {
                     <LineChart data={seriesChartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={18} />
-                      <YAxis domain={seriesChartDomain} allowDataOverflow={false} />
+                      <YAxis domain={seriesChartDomain} allowDataOverflow tickFormatter={(value) => formatNumber(value, 1)} />
                       <Tooltip />
                       <Legend />
                       <Line type="linear" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />

@@ -162,6 +162,7 @@ export const api = {
     model?: string;
     source?: Source;
     horizon_days?: number;
+    include_forecast?: boolean;
   }) {
     return request<StationSeriesResponse>("/api/analytics/station-series", {}, params);
   },

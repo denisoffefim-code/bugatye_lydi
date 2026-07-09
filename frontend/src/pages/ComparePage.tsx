@@ -315,7 +315,7 @@ export function ComparePage() {
                 <LineChart data={chartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={18} />
-                  <YAxis domain={chartDomain} allowDataOverflow={false} />
+                  <YAxis domain={chartDomain} allowDataOverflow tickFormatter={(value) => formatNumber(value, 1)} />
                   <Tooltip />
                   <Legend />
                   <Line type="linear" dataKey="actual" name="Факт" stroke="#22c55e" strokeWidth={2} dot={false} />

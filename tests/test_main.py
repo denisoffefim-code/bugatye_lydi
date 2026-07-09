@@ -268,6 +268,29 @@ class ForecastAnalyticsQueryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response["source"], "forecast")
 
+    async def test_station_series_can_skip_forecast_join_for_observations(self) -> None:
+        conn = _RecordingConnection(
+            fetchrow_results=[{"id": 1, "wmo_index": "12345", "name": "Test", "country": "RU", "latitude": 1, "longitude": 2}],
+            fetch_results=[[{"observation_date": date(2026, 7, 1), "actual_avg_temp": 12.3}]],
+        )
+
+        with (
+            patch("skycast.main.get_pool", return_value=_FakePool(conn)),
+            patch("skycast.main._resolve_station_id", return_value=1),
+        ):
+            response = await station_series(
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 2),
+                station_id=1,
+                include_forecast=False,
+            )
+
+        self.assertEqual(response["returned"], 1)
+        query, args = conn.fetch_calls[0]
+        self.assertNotIn("forecast_values", query)
+        self.assertIn("FROM weather_data wd", query)
+        self.assertEqual(args, (1, date(2026, 7, 1), date(2026, 7, 2)))
+
     async def test_forecast_coverage_applies_date_source_model_and_horizon_filters(self) -> None:
         conn = _RecordingConnection(
             fetch_results=[[{"model": "best_match", "source": "previous_runs", "horizon_days": 3, "forecast_rows": 42}]]
