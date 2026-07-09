@@ -4,7 +4,7 @@ import { api, formatApiError } from "../api/client";
 import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../components/DataState";
 import { MetricCard } from "../components/MetricCard";
 import { Modal } from "../components/Modal";
-import type { Station, StationDetailsResponse, StationSeriesItem, StationSeriesResponse } from "../types";
+import type { Station, StationSeriesItem, StationSeriesResponse } from "../types";
 import { defaultRange, finiteNumber, formatDate, formatNumber } from "../utils";
 
 interface ObservationFilters {
@@ -17,7 +17,6 @@ interface ObservationFilters {
 export function ObservationsPage() {
   const range = useMemo(() => defaultRange(7), []);
   const [stations, setStations] = useState<Station[]>([]);
-  const [details, setDetails] = useState<StationDetailsResponse | null>(null);
   const [series, setSeries] = useState<StationSeriesResponse | null>(null);
   const [selectedObservation, setSelectedObservation] = useState<StationSeriesItem | null>(null);
   const [filters, setFilters] = useState<ObservationFilters>({
@@ -89,17 +88,13 @@ export function ObservationsPage() {
     setSelectedObservation(null);
 
     try {
-      const [seriesResponse, detailsResponse] = await Promise.all([
-        api.stationSeries({
-          station_id: Number(query.stationId),
-          start_date: query.startDate,
-          end_date: query.endDate,
-          include_forecast: false
-        }),
-        api.stationDetails(Number(query.stationId))
-      ]);
+      const seriesResponse = await api.stationSeries({
+        station_id: Number(query.stationId),
+        start_date: query.startDate,
+        end_date: query.endDate,
+        include_forecast: false
+      });
       setSeries(seriesResponse);
-      setDetails(detailsResponse);
       setActiveFilters(query);
       setHasLoaded(true);
     } catch (err) {
@@ -118,7 +113,6 @@ export function ObservationsPage() {
     });
     setActiveFilters(null);
     setSeries(null);
-    setDetails(null);
     setSelectedObservation(null);
     setAnalysisError(null);
     setHasAttemptedAnalysis(false);
@@ -145,7 +139,7 @@ export function ObservationsPage() {
     });
   }, [activeFilters?.search, series?.items, series?.station.name, series?.station.wmo_index]);
 
-  const station = details?.station;
+  const station = series?.station;
   const averageTempValues = actualRows
     .map((item) => finiteNumber(item.actual_avg_temp))
     .filter((value): value is number => value !== null);
