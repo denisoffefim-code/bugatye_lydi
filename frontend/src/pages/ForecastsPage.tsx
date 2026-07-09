@@ -17,7 +17,7 @@ import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../component
 import { MetricCard } from "../components/MetricCard";
 import { Modal } from "../components/Modal";
 import type { Metric, Station, StationSeriesItem, StationSeriesResponse } from "../types";
-import { chartNumberDomain, defaultRange, formatDate, formatNumber, metricLabels, metricUnits } from "../utils";
+import { chartNumberDomain, defaultRange, finiteNumber, formatDate, formatNumber, metricLabels, metricUnits } from "../utils";
 
 interface ForecastFilters {
   stationId: number | "";
@@ -62,7 +62,7 @@ function hasForecastData(item: StationSeriesItem) {
 }
 
 function average(values: Array<number | null | undefined>) {
-  const numericValues = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const numericValues = values.map(finiteNumber).filter((value): value is number => value !== null);
   if (!numericValues.length) {
     return null;
   }
@@ -427,7 +427,7 @@ export function ForecastsPage() {
                   <LineChart data={chartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={18} />
-                    <YAxis domain={chartDomain} allowDataOverflow={false} />
+                    <YAxis domain={chartDomain} allowDataOverflow tickFormatter={(value) => formatNumber(value, 1)} />
                     <Tooltip />
                     <Legend />
                     <Line type="linear" dataKey="forecast" name="Прогноз" stroke="#38bdf8" strokeWidth={2} dot={false} />

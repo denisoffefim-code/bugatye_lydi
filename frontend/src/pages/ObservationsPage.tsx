@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, LoadingPanel, SkeletonGrid } from "../component
 import { MetricCard } from "../components/MetricCard";
 import { Modal } from "../components/Modal";
 import type { Station, StationDetailsResponse, StationSeriesItem, StationSeriesResponse } from "../types";
-import { defaultRange, formatDate, formatNumber } from "../utils";
+import { defaultRange, finiteNumber, formatDate, formatNumber } from "../utils";
 
 interface ObservationFilters {
   stationId: number | "";
@@ -90,7 +90,12 @@ export function ObservationsPage() {
 
     try {
       const [seriesResponse, detailsResponse] = await Promise.all([
-        api.stationSeries({ station_id: Number(query.stationId), start_date: query.startDate, end_date: query.endDate }),
+        api.stationSeries({
+          station_id: Number(query.stationId),
+          start_date: query.startDate,
+          end_date: query.endDate,
+          include_forecast: false
+        }),
         api.stationDetails(Number(query.stationId))
       ]);
       setSeries(seriesResponse);
@@ -142,8 +147,8 @@ export function ObservationsPage() {
 
   const station = details?.station;
   const averageTempValues = actualRows
-    .map((item) => item.actual_avg_temp)
-    .filter((value): value is number => value !== null && value !== undefined);
+    .map((item) => finiteNumber(item.actual_avg_temp))
+    .filter((value): value is number => value !== null);
   const averageTemp = averageTempValues.length
     ? averageTempValues.reduce((sum, value) => sum + value, 0) / averageTempValues.length
     : null;
@@ -153,7 +158,12 @@ export function ObservationsPage() {
       if (item.actual_min_temp === null || item.actual_max_temp === null) {
         return null;
       }
-      return item.actual_max_temp - item.actual_min_temp;
+      const minimum = finiteNumber(item.actual_min_temp);
+      const maximum = finiteNumber(item.actual_max_temp);
+      if (minimum === null || maximum === null) {
+        return null;
+      }
+      return maximum - minimum;
     })
     .filter((value): value is number => value !== null);
   const maxSpan = temperatureSpan.length ? Math.max(...temperatureSpan) : null;

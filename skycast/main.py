@@ -1936,6 +1936,7 @@ async def station_series(
     model: str | None = None,
     source: str | None = None,
     horizon_days: int | None = Query(default=None, ge=1, le=7),
+    include_forecast: bool = True,
     _: dict[str, Any] = Depends(get_current_viewer_auth_context),
 ) -> dict[str, Any]:
     if end_date < start_date:
@@ -1974,8 +1975,9 @@ async def station_series(
             resolved_station_id,
         )
 
-        rows = await conn.fetch(
-            f"""
+        if include_forecast:
+            rows = await conn.fetch(
+                f"""
             WITH latest_forecast AS (
                 SELECT DISTINCT ON ({latest_forecast_identity_sql()})
                     fv.forecast_date,
@@ -1993,9 +1995,15 @@ async def station_series(
                 JOIN forecast_runs fr ON fr.id = fv.run_id
                 WHERE {' AND '.join(latest_forecast_clauses)}
                 ORDER BY {latest_forecast_order_by_sql()}
+            ),
+            actual_weather AS (
+                SELECT observation_date, avg_temp, min_temp, max_temp, precipitation
+                FROM weather_data
+                WHERE station_id = $1
+                  AND observation_date BETWEEN $2 AND $3
             )
             SELECT
-                wd.observation_date,
+                COALESCE(wd.observation_date, lf.forecast_date) AS observation_date,
                 lf.source,
                 lf.provider,
                 lf.model,
@@ -2014,15 +2022,45 @@ async def station_series(
                 lf.forecast_precipitation,
                 ROUND((lf.forecast_precipitation - wd.precipitation)::numeric, 2) AS error_precipitation,
                 lf.forecast_max_wind_speed
-            FROM weather_data wd
-            LEFT JOIN latest_forecast lf
+            FROM actual_weather wd
+            FULL OUTER JOIN latest_forecast lf
                 ON lf.forecast_date = wd.observation_date
-            WHERE wd.station_id = $1
-              AND wd.observation_date BETWEEN $2 AND $3
-            ORDER BY wd.observation_date, lf.horizon_days NULLS FIRST, lf.model NULLS FIRST, lf.source NULLS FIRST
+            ORDER BY observation_date, lf.horizon_days NULLS FIRST, lf.model NULLS FIRST, lf.source NULLS FIRST
             """,
-            *latest_forecast_args,
-        )
+                *latest_forecast_args,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    wd.observation_date,
+                    NULL::text AS source,
+                    NULL::text AS provider,
+                    NULL::text AS model,
+                    NULL::timestamptz AS run_at,
+                    NULL::integer AS horizon_days,
+                    wd.avg_temp AS actual_avg_temp,
+                    NULL::numeric AS forecast_avg_temp,
+                    NULL::numeric AS error_avg_temp,
+                    wd.min_temp AS actual_min_temp,
+                    NULL::numeric AS forecast_min_temp,
+                    NULL::numeric AS error_min_temp,
+                    wd.max_temp AS actual_max_temp,
+                    NULL::numeric AS forecast_max_temp,
+                    NULL::numeric AS error_max_temp,
+                    wd.precipitation AS actual_precipitation,
+                    NULL::numeric AS forecast_precipitation,
+                    NULL::numeric AS error_precipitation,
+                    NULL::numeric AS forecast_max_wind_speed
+                FROM weather_data wd
+                WHERE wd.station_id = $1
+                  AND wd.observation_date BETWEEN $2 AND $3
+                ORDER BY wd.observation_date
+                """,
+                resolved_station_id,
+                start_date,
+                end_date,
+            )
 
     return {
         "station": dict(station),

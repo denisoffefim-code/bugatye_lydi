@@ -126,6 +126,14 @@ export function formatNumber(value: number | string | null | undefined, digits =
   }).format(numeric);
 }
 
+export function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 export function signed(value: number | null | undefined, unit = "") {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "нет данных";
@@ -186,9 +194,9 @@ export function collapseSeriesRows(items: StationSeriesItem[], metric: Metric): 
   const seenDates = new Set<string>();
 
   for (const item of items) {
-    const actual = item[fields.actual] as number | null;
-    const forecast = item[fields.forecast] as number | null;
-    const error = item[fields.error] as number | null;
+    const actual = finiteNumber(item[fields.actual]);
+    const forecast = finiteNumber(item[fields.forecast]);
+    const error = finiteNumber(item[fields.error]);
 
     if (actual === null && forecast === null) {
       continue;
@@ -253,8 +261,8 @@ export function biasSummary(bias: number | null | undefined, metric: Metric) {
     : `Прогноз чаще занижает показатель «${metricLabels[metric].toLowerCase()}».`;
 }
 
-export function chartNumberDomain(values: Array<number | null | undefined>): [number | "auto", number | "auto"] {
-  const numbers = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+export function chartNumberDomain(values: unknown[]): [number | "auto", number | "auto"] {
+  const numbers = values.map(finiteNumber).filter((value): value is number => value !== null);
   if (!numbers.length) {
     return ["auto", "auto"];
   }

@@ -10,6 +10,7 @@ metadata:
     gwin.yandex.cloud/rules.backends.hc.http.path: /ready
     gwin.yandex.cloud/rules.backends.hc.interval: 10s
     gwin.yandex.cloud/rules.backends.hc.timeout: 5s
+    gwin.yandex.cloud/rules.backends.timeout: 60s
     gwin.yandex.cloud/rules.backends.hc.healthyThreshold: "2"
     gwin.yandex.cloud/rules.backends.hc.unhealthyThreshold: "3"
 spec:
